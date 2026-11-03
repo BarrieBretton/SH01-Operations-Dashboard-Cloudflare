@@ -24,7 +24,7 @@ def env(name):
 
 
 def fetch(url, headers=None):
-    req = urllib.request.Request(url, headers=headers or {"Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "SH01-Operations-Collector/1.0", **(headers or {})})
     with urllib.request.urlopen(req, timeout=25) as response:
         return json.load(response)
 
@@ -33,6 +33,7 @@ def post(host, token, route, data):
     body = json.dumps(data, ensure_ascii=False).encode()
     req = urllib.request.Request(host.rstrip("/") + route, body, method="POST", headers={
         "Content-Type": "application/json", "X-INGEST-KEY": token,
+        "User-Agent": "SH01-Operations-Collector/1.0",
     })
     try:
         with urllib.request.urlopen(req, timeout=40) as response:
