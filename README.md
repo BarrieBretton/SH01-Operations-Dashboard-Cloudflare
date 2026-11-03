@@ -15,8 +15,8 @@ read-only inputs; this package does not change their workflows.
    `worker.js`, and bind the new D1 database under the exact name **`DB`**.
 3. Add two distinct, random, long **secrets** (never plaintext variables):
    `DASHBOARD_TOKEN` for the UI and `INGEST_TOKEN` for collectors. Deploy.
-4. Open the Worker's URL; enter `DASHBOARD_TOKEN`. The token remains in that
-   browser tab's memory. Do not share the URL and token together. Restrict
+4. Open the Worker's URL; enter `DASHBOARD_TOKEN`. The token remains in session storage for up to 30 minutes
+   in the same browser tab, including page reloads. Do not share the URL and token together. Restrict
    access at the edge if this dashboard is exposed beyond your own use.
 5. Save `OPS_DASHBOARD_URL` (the Worker origin) and `OPS_INGEST_TOKEN` as Kaggle
    private environment variables. Run `sync.py` with the existing safe handoff:
@@ -114,3 +114,60 @@ run to bound traffic; repeat or extend `max_pages` when backfilling.
 This is a Cloudflare deployment package; nothing is deployed automatically.
 Documentation: [Cloudflare D1 dashboard and Worker binding](https://developers.cloudflare.com/d1/get-started/),
 [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/).
+
+## Meta analytics extension (experimental coverage)
+
+This package extends the same dashboard with a Meta tab. Set `META_SYSVAR` as a
+**Worker Secret**; accepted formats are a bare Graph API token or JSON with an
+`access_token`, `token`, `page_access_token`, or `user_access_token` field. The
+value is never persisted in D1 or returned to the browser. Run `meta-schema.sql`
+in the **same** D1 console after `schema.sql`, then paste the updated
+`worker.js` into the Worker editor and deploy. In Worker Settings → Triggers,
+add a Cron Trigger (for example `*/30 * * * *`) for periodic ingestion; on
+first run press **Sync Meta now** while signed in. Grant the access token the
+permissions required by your app's Meta Login configuration; a token that
+cannot enumerate `me/accounts` cannot discover all Pages. Refresh the token
+at its issuing source before expiry. The browser never receives it.
+
+Graph version is pinned to v24.0 in `worker.js`. The initial implementation
+probes metrics individually on Pages, Instagram accounts, posts, Reels and
+active Stories, and stores numeric series and capability failures. The
+availability view lists failed metric probes without exposing token-bearing
+responses. Disabled/unsupported fields appear as unavailable, not zero.
+Snapshots are stored only when numeric values are returned. The separate
+account daily series should not be mistaken for lifetime content growth.
+
+**Coverage limitation:** Facebook Page post/Reel detail and ad insights,
+audience breakdowns, raw-response retention, per-age adaptive schedules,
+multiple fair-comparison windows, and downloads are not implemented in this
+version. Meta direct API credentials were absent in the development runtime;
+no Pages or metrics were validated live. This is therefore an operational
+starting point, not an exhaustive verified Meta analytics product. The Meta
+sync route and cron do not populate fabricated data.
+
+## UI refresh — deploy without changing database or secrets
+
+Replace only worker.js in Cloudflare's code editor and deploy. Existing
+D1 records and secrets are preserved. If you have not installed the preceding
+Meta extension, its meta-schema.sql still needs to be run separately.
+
+- Producer cards summarize low stock, consumed items and stale snapshots.
+- Account, creator, source type and mapped workflow names appear as tags.
+- Stock status and freshness are separate: stale data is not called healthy.
+- Search, status/freshness filters, attention-first sorting and filtered CSV.
+- Sticky table headers, scrollable tables, mobile layouts and light/dark mode.
+- Session countdown, 30-minute tab session, immediate lock and cached-view clearing.
+- API responses arriving after lock or superseded by newer requests are ignored.
+- Refresh reads stored data; it does not run the collector. Dates labelled source
+  sync describe the last ingestion, not proof of an upstream live connection.
+- Limits (2,000 producers / 5,000 items per producer) are disclosed. No automatic
+  source-health or exhaustive producer-discovery claim is made.
+- Session expiry is a browser convenience, not rotation of DASHBOARD_TOKEN.
+  Worker secret rotation remains the mechanism for revoking that credential.
+
+dashboard.html is the editable UI source; it requires the Worker's API and
+is not a standalone demo. Run python build_ui.py to embed it into worker.js.
+The older assembly script is removed to prevent overwriting the UI updates.
+Tests: node --test smoke.test.mjs ui.test.mjs.
+UI tests exercise the inline script with a minimal DOM harness. A real browser
+visual pass and live Meta credential validation were unavailable in this run.

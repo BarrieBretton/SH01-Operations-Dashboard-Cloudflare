@@ -1,0 +1,7 @@
+.sh01-patch-backups/
+*.backup-*
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+__pycache__/
