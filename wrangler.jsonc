@@ -8,5 +8,10 @@
       "database_name": "sh01-operations-dashboard-cloudflare",
       "database_id": "fa0eeb6b-20ab-439f-a822-917022229230"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": [
+      "*/10 * * * *"
+    ]
+  }
 }
