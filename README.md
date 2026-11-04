@@ -179,3 +179,7 @@ Tests: node --test smoke.test.mjs ui.test.mjs.
 UI tests exercise the inline script with a minimal DOM harness. A real browser
 visual pass and live Meta credential validation were unavailable in this run.
 
+
+## Content, previews and cleanup upgrade
+
+Start with [CONTENT-UPGRADE.md](CONTENT-UPGRADE.md). Apply the additive content-schema.sql migration, deploy the generated Worker, and connect publisher hooks. Existing producer eligibility and source-evidence boundaries remain. New Google writes and provider deletions are disabled by default. The optional FastAPI files and inactive n8n workflows are included but are not automatically installed into other repos/services.

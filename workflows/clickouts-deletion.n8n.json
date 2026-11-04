@@ -1,0 +1,239 @@
+{
+  "name": "SH01 clickouts deletion - preview first",
+  "active": false,
+  "nodes": [
+    {
+      "id": "111e6438-aeb9-53d2-b296-da8a588b7358",
+      "name": "Clickouts request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "position": [
+        0,
+        0
+      ],
+      "notes": "No schedule or webhook. Default mode=preview. The sheet branch never executes deletion.",
+      "notesInFlow": true
+    },
+    {
+      "id": "dcf3f7e1-46cf-532d-9869-f5783f2c0307",
+      "name": "Prepare request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One envelope per invocation. Sheet data can only produce previews.\nconst inputs = $input.all();\nif (inputs.length !== 1) throw new Error('Pass exactly one request envelope');\nconst raw = inputs[0].json;\nconst source = raw.source === undefined ? 'input' : raw.source;\nconst mode = raw.mode === undefined ? 'preview' : raw.mode;\nif (!['input', 'sheet'].includes(source)) throw new Error('source must be input or sheet');\nif (!['preview', 'execute'].includes(mode)) throw new Error('mode must be preview or execute');\nif (source === 'sheet' && mode !== 'preview') throw new Error('Sheet execution is preview-only. Submit one reviewed URL through source=input to execute');\nif (Object.hasOwn(raw, 'dry_run') || Object.hasOwn(raw, 'confirmation')) throw new Error('Use mode and per-item confirmation; top-level deletion flags are rejected');\nconst config = {source, mode, platform: raw.platform || null,\n  account_id: raw.account_id || null, document_id: raw.document_id || 'DOCUMENT_ID',\n  sheet_name: raw.sheet_name || 'clickouts', items: raw.items || []};\nif (source === 'sheet') {\n  if (config.document_id === 'DOCUMENT_ID' || !/^[A-Za-z0-9_-]{20,200}$/.test(config.document_id)) throw new Error('Supply the existing workbook document_id; DOCUMENT_ID is a placeholder');\n  if (typeof config.sheet_name !== 'string' || !config.sheet_name.trim()) throw new Error('Supply sheet_name');\n} else if (!Array.isArray(config.items) || config.items.length === 0 || config.items.length > 25) {\n  throw new Error('Supply 1 to 25 items');\n}\nif (mode === 'execute' && config.items.length !== 1) throw new Error('Execute accepts one reviewed post per invocation');\nreturn [{json: config}];\n"
+      },
+      "position": [
+        260,
+        0
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "1a6a2eae-2fda-551f-9a13-4c5311cf1c44",
+      "name": "Read clickouts sheet",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "source-is-sheet",
+              "leftValue": "={{ $json.source }}",
+              "rightValue": "sheet",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [
+        520,
+        0
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "6c3a6d32-bb9c-558c-bc15-20b0f4650cc6",
+      "name": "Read URLS from clickouts",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $json.document_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $json.sheet_name }}",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "position": [
+        780,
+        -150
+      ],
+      "notes": "Bind Google Sheets OAuth. Pass document_id for the existing workbook (DOCUMENT_ID is intentionally not guessed). Sheet defaults to clickouts; URL column must be named URLS. This node only reads rows.",
+      "notesInFlow": true
+    },
+    {
+      "id": "42c63be1-76e0-5df2-b741-649bf5ce9830",
+      "name": "Normalize sheet previews",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const config = $('Prepare request').first().json;\nconst rows = $input.all().map((i, index) => ({platform: i.json.platform, permalink: i.json.URLS, account_id: i.json.account_id, __input_index: index})).filter(r => r.permalink !== null && r.permalink !== undefined && !(typeof r.permalink === 'string' && !r.permalink.trim())).map(r => ({...r, permalink: typeof r.permalink === 'string' ? r.permalink.trim() : r.permalink}));\n// The builder supplies rows and config. This node never fetches arbitrary URLs.\nconst seen = new Set();\nif (rows.length > 25) throw new Error('Maximum 25 preview rows per invocation; select a smaller batch');\nreturn rows.map((row, index) => {\n  const platform = row.platform || config.platform;\n  const permalink = row.permalink;\n  const account = row.account_id === undefined ? config.account_id : row.account_id;\n  if (!['facebook', 'instagram', 'tumblr'].includes(platform)) throw new Error('Each row requires a supported explicit platform');\n  if (typeof permalink !== 'string' || /[\\s\\\\]/.test(permalink)) throw new Error('Each row requires one HTTPS permalink');\n  const m = permalink.match(/^https:\\/\\/([A-Za-z0-9.-]+)(\\/[^?#]*)?(?:\\?([^#]*))?(?:#.*)?$/);\n  if (!m) throw new Error('Invalid permalink');\n  const h = m[1].toLowerCase().replace(/^www\\./, ''), path = m[2] || '/', query = m[3] || '';\n  if (platform === 'instagram' && !(h === 'instagram.com' && /^\\/(p|reel|tv)\\/[A-Za-z0-9_-]+\\/?$/.test(path))) throw new Error('Unsupported Instagram permalink');\n  if (platform === 'facebook' && !(['facebook.com', 'm.facebook.com', 'web.facebook.com'].includes(h) && (/\\/(posts|videos)\\//.test(path) || /^\\/reel\\//.test(path) || /(?:^|&)(story_fbid|v)=/.test(query)))) throw new Error('Unsupported Facebook permalink');\n  if (platform === 'tumblr' && !((h.endsWith('.tumblr.com') && /^\\/post\\/\\d+(?:\\/|$)/.test(path)) || (h === 'tumblr.com' && /^\\/[A-Za-z0-9_-]+\\/\\d+(?:\\/|$)/.test(path)))) throw new Error('Unsupported Tumblr permalink');\n  for (const pair of query.split('&')) if (/token|secret|password|api.?key|signature|authorization/i.test(decodeURIComponent(pair.split('=')[0]))) throw new Error('Secret-bearing permalink rejected');\n  if (account !== null && account !== undefined && (typeof account !== 'string' || !/^[A-Za-z0-9_.:@-]{1,160}$/.test(account))) throw new Error('account_id must be a string identifier or omitted');\n  const key = platform + ':' + (account || '') + ':' + permalink;\n  if (seen.has(key)) throw new Error('Repeated target in the supplied batch');\n  seen.add(key);\n  const body = {platform, permalink, account_id: account || null, dry_run: true, confirmation: null};\n  if (config.mode === 'execute') {\n    if (config.source !== 'input' || rows.length !== 1 || typeof row.confirmation !== 'string' || !row.confirmation.startsWith('DELETE ' + platform + ':') || !/^DELETE (facebook|instagram|tumblr):[A-Za-z0-9_.:@-]+:[A-Za-z0-9_.:@-]+$/.test(row.confirmation)) throw new Error('Use the exact confirmation returned by the preview for this post');\n    body.dry_run = false;\n    body.confirmation = row.confirmation;\n  }\n  // Supplied targets share one envelope; sheet rows retain their source indexes.\n  return {json: body, pairedItem: {item: config.source === 'sheet' ? row.__input_index : 0}};\n});\n"
+      },
+      "position": [
+        1040,
+        -150
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "51dd34f4-2a65-5dd1-989e-6e44939cb71a",
+      "name": "Normalize supplied targets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const config = $input.first().json;\nconst rows = config.items;\n// The builder supplies rows and config. This node never fetches arbitrary URLs.\nconst seen = new Set();\nif (rows.length > 25) throw new Error('Maximum 25 preview rows per invocation; select a smaller batch');\nreturn rows.map((row, index) => {\n  const platform = row.platform || config.platform;\n  const permalink = row.permalink;\n  const account = row.account_id === undefined ? config.account_id : row.account_id;\n  if (!['facebook', 'instagram', 'tumblr'].includes(platform)) throw new Error('Each row requires a supported explicit platform');\n  if (typeof permalink !== 'string' || /[\\s\\\\]/.test(permalink)) throw new Error('Each row requires one HTTPS permalink');\n  const m = permalink.match(/^https:\\/\\/([A-Za-z0-9.-]+)(\\/[^?#]*)?(?:\\?([^#]*))?(?:#.*)?$/);\n  if (!m) throw new Error('Invalid permalink');\n  const h = m[1].toLowerCase().replace(/^www\\./, ''), path = m[2] || '/', query = m[3] || '';\n  if (platform === 'instagram' && !(h === 'instagram.com' && /^\\/(p|reel|tv)\\/[A-Za-z0-9_-]+\\/?$/.test(path))) throw new Error('Unsupported Instagram permalink');\n  if (platform === 'facebook' && !(['facebook.com', 'm.facebook.com', 'web.facebook.com'].includes(h) && (/\\/(posts|videos)\\//.test(path) || /^\\/reel\\//.test(path) || /(?:^|&)(story_fbid|v)=/.test(query)))) throw new Error('Unsupported Facebook permalink');\n  if (platform === 'tumblr' && !((h.endsWith('.tumblr.com') && /^\\/post\\/\\d+(?:\\/|$)/.test(path)) || (h === 'tumblr.com' && /^\\/[A-Za-z0-9_-]+\\/\\d+(?:\\/|$)/.test(path)))) throw new Error('Unsupported Tumblr permalink');\n  for (const pair of query.split('&')) if (/token|secret|password|api.?key|signature|authorization/i.test(decodeURIComponent(pair.split('=')[0]))) throw new Error('Secret-bearing permalink rejected');\n  if (account !== null && account !== undefined && (typeof account !== 'string' || !/^[A-Za-z0-9_.:@-]{1,160}$/.test(account))) throw new Error('account_id must be a string identifier or omitted');\n  const key = platform + ':' + (account || '') + ':' + permalink;\n  if (seen.has(key)) throw new Error('Repeated target in the supplied batch');\n  seen.add(key);\n  const body = {platform, permalink, account_id: account || null, dry_run: true, confirmation: null};\n  if (config.mode === 'execute') {\n    if (config.source !== 'input' || rows.length !== 1 || typeof row.confirmation !== 'string' || !row.confirmation.startsWith('DELETE ' + platform + ':') || !/^DELETE (facebook|instagram|tumblr):[A-Za-z0-9_.:@-]+:[A-Za-z0-9_.:@-]+$/.test(row.confirmation)) throw new Error('Use the exact confirmation returned by the preview for this post');\n    body.dry_run = false;\n    body.confirmation = row.confirmation;\n  }\n  // Supplied targets share one envelope; sheet rows retain their source indexes.\n  return {json: body, pairedItem: {item: config.source === 'sheet' ? row.__input_index : 0}};\n});\n"
+      },
+      "position": [
+        780,
+        150
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "d967fa8f-a1df-527e-83e2-c46fec08512c",
+      "name": "Preview or execute reviewed deletion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://sh01.vivojaymail.workers.dev/social/posts/delete",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "position": [
+        1320,
+        0
+      ],
+      "notes": "Bind HTTP Header Auth: X-API-KEY for this social endpoint. No automatic retry: inspect an uncertain result before trying again. Server must independently verify ownership, exact confirmation and its execution-enable flag.",
+      "notesInFlow": true,
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Clickouts request": {
+      "main": [
+        [
+          {
+            "node": "Prepare request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare request": {
+      "main": [
+        [
+          {
+            "node": "Read clickouts sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read clickouts sheet": {
+      "main": [
+        [
+          {
+            "node": "Read URLS from clickouts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize supplied targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read URLS from clickouts": {
+      "main": [
+        [
+          {
+            "node": "Normalize sheet previews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize sheet previews": {
+      "main": [
+        [
+          {
+            "node": "Preview or execute reviewed deletion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize supplied targets": {
+      "main": [
+        [
+          {
+            "node": "Preview or execute reviewed deletion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  },
+  "pinData": {},
+  "tags": []
+}

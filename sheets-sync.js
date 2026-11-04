@@ -36,7 +36,7 @@ async function producerHash(s){return Array.from(new Uint8Array(await crypto.sub
 function scheduleRoutes(rows){
  return rows.map(({row,data:r})=>{
   const name=String(r.workflow??''), matches=SOURCE_REGISTRY.workflows.filter(w=>w.name===name);
-  return {row,workflow_name:clean(name,200),workflow_id:matches.length===1?matches[0].id:null,accounts:[...new Set(producerText(r['associated accounts']).split(',').map(producerAccount).filter(Boolean))].map(a=>clean(a,150)),resolution:matches.length===1?'exact_unique_name':'unresolved_name'};
+  return {row,workflow_name:clean(name,200),workflow_id:matches.length===1?matches[0].id:null,accounts:[...new Set(producerText(r['associated accounts']).split(',').map(producerAccount).filter(Boolean))].map(a=>clean(a,150)),resolution:matches.length===1?'exact_unique_name':'unresolved_name',timings:clean(r.timings??'',200),run:clean(r.run??'',80),timezone:'Asia/Kolkata'};
  });
 }
 function sourceAssociations(routes){
@@ -85,6 +85,8 @@ async function sheetSync(env){
   const groups=await makeStockGroups(env,tables,routes),references=[];
   // Optional non-stock sources cannot turn a successful stock read into fake zeros.
   for(const title of REFERENCE_TABS){try{references.push({...referenceSummary(title,sheetRows(await readSheet(env,token,title),title)),status:'ok'})}catch(e){references.push({tab:title,status:'unavailable',error_code:safeSheetError(e),rows:null,ready_count:null})}}
+  let clickouts={status:'unavailable',rows:[]};
+  try{const rows=sheetRows(await readSheet(env,token,'clickouts'),'clickouts');if(rows.some(r=>!Object.hasOwn(r.data,'urls')))throw Error('sheet_required_columns_missing');const links=rows.map(r=>({row:r.row,permalink:producerURL(r.data.urls)})).filter(r=>r.permalink);clickouts={status:'ok',rows:links.slice(0,500),total_rows:rows.length,truncated:links.length>500};}catch(e){clickouts.error_code=safeSheetError(e)}
   const fetched=new Date().toISOString();let batch=[];
   const flush=async()=>{if(batch.length){await db.batch(batch);batch=[]}};
   for(const g of groups.values()){
@@ -93,7 +95,7 @@ async function sheetSync(env){
    for(const i of g.items){batch.push(db.prepare('INSERT INTO sheet_live_items(version,producer_id,item_id,payload) VALUES(?,?,?,?)').bind(version,g.producer_id,i.item_id,JSON.stringify(i)));if(batch.length>=80)await flush()}
    if(batch.length>=80)await flush();
   }
-  batch.push(db.prepare('INSERT INTO sheet_live_producers(version,producer_id,payload,fetched_at) VALUES(?,?,?,?)').bind(version,SOURCE_META_ID,JSON.stringify({policy_version:2,routes,schedule_state:scheduleState,schedule_error:scheduleError,references,collection_started:started,collection_finished:fetched,required_tabs:STOCK_TABS}),fetched));
+  batch.push(db.prepare('INSERT INTO sheet_live_producers(version,producer_id,payload,fetched_at) VALUES(?,?,?,?)').bind(version,SOURCE_META_ID,JSON.stringify({policy_version:2,routes,schedule_state:scheduleState,schedule_error:scheduleError,references,clickouts,collection_started:started,collection_finished:fetched,required_tabs:STOCK_TABS}),fetched));
   await flush();
   const published=await db.prepare("UPDATE sheet_sync_state SET active_version=?,last_success=?,status='ok',error_code=NULL,lease=NULL,lease_until=NULL WHERE id=1 AND lease=? AND lease_until>?").bind(version,fetched,lease,Date.now()).run();
   if(!published.meta.changes)throw Error('sheet_lease_expired');
@@ -124,5 +126,5 @@ async function liveProducerItems(env,id,request){
 }
 async function producerSources(env){
  const state=await sheetStatus(env),meta=await sourceMeta(env,state),routes=meta?.routes??SOURCE_REGISTRY.schedule,assoc=sourceAssociations(routes);
- return json({coverage:SOURCE_REGISTRY.coverage,source_archive:SOURCE_REGISTRY.source_archive,evidence_date:SOURCE_REGISTRY.evidence_date,workflow_sha256:SOURCE_REGISTRY.workflow_sha256,workflow_scope:SOURCE_REGISTRY.scope,workflow_base_url:producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev'),schedule_evidence:meta?(meta.schedule_state==='ok'?'live_sheet':'live_sheet_unavailable'):'handoff_snapshot',references:meta?.references||[],issues:SOURCE_REGISTRY.issues,calls:SOURCE_REGISTRY.calls,schedule:routes,rows:SOURCE_REGISTRY.sources.map(s=>{const evidence=assoc.get(s.source_id)||[];return {...s,accounts:[...new Set(evidence.flatMap(e=>e.accounts))],account_evidence:evidence,measurement:s.kind==='pinterest_rapidapi'?'on_demand_not_finite_stock':'not_connected',remaining:null}})});
+ return json({coverage:SOURCE_REGISTRY.coverage,source_archive:SOURCE_REGISTRY.source_archive,evidence_date:SOURCE_REGISTRY.evidence_date,workflow_sha256:SOURCE_REGISTRY.workflow_sha256,workflow_scope:SOURCE_REGISTRY.scope,workflow_base_url:producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev'),schedule_evidence:meta?(meta.schedule_state==='ok'?'live_sheet':'live_sheet_unavailable'):'handoff_snapshot',references:meta?.references||[],issues:SOURCE_REGISTRY.issues,calls:SOURCE_REGISTRY.calls,schedule:routes.map(r=>({...r,workflow_url:r.workflow_id?producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id):''})),rows:SOURCE_REGISTRY.sources.map(s=>{const evidence=assoc.get(s.source_id)||[];return {...s,accounts:[...new Set(evidence.flatMap(e=>e.accounts))],account_evidence:evidence,measurement:s.kind==='pinterest_rapidapi'?'on_demand_not_finite_stock':'not_connected',remaining:null}})});
 }

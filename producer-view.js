@@ -13,7 +13,7 @@ async function loadProducers(){
  $('source-coverage').textContent=(s.coverage?.workflows||0)+' workflows / '+(s.coverage?.nodes||0)+' nodes inventoried from '+s.source_archive+'. Workflow definitions are an export snapshot, not live n8n health. Account routing evidence: '+s.schedule_evidence+'. Unknown inventory is never zero.';
  $('source-queues').innerHTML=(s.references||[]).map(r=>'<tr><td>'+esc(r.tab)+'</td><td>'+esc(r.status)+(r.error_code?'<div class="sub">'+esc(r.error_code)+'</div>':'')+'</td><td>'+esc(r.rows??'Unknown')+'</td><td>'+esc(JSON.stringify(r.status_counts||{}))+'</td></tr>').join('');
  $('source-issues').textContent=(s.coverage?.unresolved_code_nodes||0)+' nodes contain I/O or redacted code requiring runtime evidence; '+(s.coverage?.unresolved_subworkflow_calls||0)+' subworkflow targets unresolved. '+(s.schedule||[]).filter(r=>!r.workflow_id).length+' current schedule rows do not match a unique exported workflow. Credential values, CFG settings and dynamic folder/channel choices are not inferred.';
- renderProducers();renderSources();banner(d.warning||'');$('freshness').textContent='Stored data refreshed '+new Date().toLocaleString();
+ renderProducers();renderSources();renderProducerSchedule();banner(d.warning||'');$('freshness').textContent='Stored data refreshed '+new Date().toLocaleString();
 }
 function renderProducers(){
  const terms=$('producer-search').value.trim().toLowerCase().split(/\s+/),desired=$('producer-status').value,fresh=$('producer-fresh').value;
@@ -31,6 +31,14 @@ function renderSources(){
  sourcePage=Math.max(0,Math.min(sourcePage,Math.max(0,Math.ceil(sourceRows.length/100)-1)));
  $('source-rows').innerHTML=sourceRows.slice(sourcePage*100,sourcePage*100+100).map(s=>'<tr><td><strong>'+link((sourceReport.workflow_base_url||'').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(s.workflow_id),s.workflow_name)+'</strong><div class="sub">'+esc(s.node_name)+'</div>'+tagList([s.active_at_export?'Active at export':'Inactive at export',s.disabled?'Node disabled':s.reachable_from_trigger?'Graph-reachable':'Disconnected / no trigger path'])+'</td><td>'+tagList([s.kind,s.role])+'<div class="sub">'+esc(s.tab||s.endpoint_host||'Dynamic / undisclosed locator')+'</div></td><td>'+tagList(s.accounts)+(s.accounts.length?'':'Unresolved / no explicit account route')+'<div class="sub">'+esc(s.account_evidence.length?'Exact schedule match / literal call chain; branch selection unverified':'No account-name guessing')+'</div></td><td><span class="badge muted">'+esc(s.kind==='pinterest_rapidapi'?'On demand; finite stock not defined':'Remaining inventory unknown')+'</span><div class="sub">'+esc(s.has_redacted_parameters?'Redacted parameters present. ':'')+esc(s.kind==='google_sheets'?'See measured stock or tab state summaries above.':'Source-specific live inventory not connected.')+'</div></td></tr>').join('');
  $('source-page').textContent=sourceRows.length+' matching integration nodes · page '+(sourcePage+1)+' of '+Math.max(1,Math.ceil(sourceRows.length/100))+' · nodes are dependencies, not distinct stock pools';$('source-prev').disabled=sourcePage===0;$('source-next').disabled=(sourcePage+1)*100>=sourceRows.length;
+}
+function renderProducerSchedule(){
+ if(!sourceReport)return;
+ const rows=sourceReport.schedule||[];
+ $('schedule-evidence').textContent='Schedule evidence: '+(sourceReport.schedule_evidence||'Unknown')+' · '+rows.length+' schedule rows. Timezone comes from the supplied schedule metadata.';
+ const clock='<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8"/><path d="M10 5v5l3 2"/></svg>';
+ const value=v=>v===undefined||v===null||v===''?'Unknown':typeof v==='object'?JSON.stringify(v):String(v);
+ $('schedule-rows').innerHTML=rows.length?rows.map(r=>'<tr><td><strong>'+(r.workflow_url||r.workflow_id?link(r.workflow_url||(sourceReport.workflow_base_url||'').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id),r.workflow_name||r.workflow_id):esc(r.workflow_name||'Unresolved workflow'))+'</strong><div class="sub">Sheet row '+esc(r.row??r.source_row??'Unknown')+'</div></td><td>'+tagList(r.accounts||[])+'</td><td><span class="clock-label">'+clock+esc(value(r.timings))+'</span><div class="sub">'+esc(r.timezone||'Timezone unverified')+'</div></td><td>'+contentState(value(r.run))+'</td><td>'+contentState(r.resolution||'Unverified')+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No schedule records are available.</td></tr>';
 }
 async function showItems(id){
  const p=producerList.find(x=>x.producer_id===id);if(!p)return;

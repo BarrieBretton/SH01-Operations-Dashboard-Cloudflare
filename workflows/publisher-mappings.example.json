@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "mappings": [
+    {
+      "workflow_id": "WORKFLOW_ID_FROM_EXPORT",
+      "node_id": "VERIFIED_FINAL_SUCCESS_NODE_ID_FROM_EXPORT",
+      "output_index": 0,
+      "final_published_id_verified": true,
+      "success_expression": "={{ $json.publish_succeeded === true }}",
+      "fields": {
+        "platform": "={{ $json.platform }}",
+        "account_id": "={{ $json.account_id }}",
+        "account_handle": "={{ $json.account_handle }}",
+        "post_id": "={{ $json.post_id }}",
+        "permalink": "={{ $json.permalink }}",
+        "media_type": "={{ $json.media_type }}",
+        "published_at": "={{ $json.published_at }}",
+        "workflow_id": "={{ $workflow.id }}",
+        "workflow_url": "={{ 'https://n8n-prod-1.vivojaymail.workers.dev/workflow/' + $workflow.id }}"
+      }
+    }
+  ]
+}

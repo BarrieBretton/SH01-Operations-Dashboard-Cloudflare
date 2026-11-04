@@ -1,0 +1,55 @@
+<section id="meta-view" class="card hidden" aria-label="Content and analytics">
+ <div class="section-heading"><div><div class="eyebrow">Published library / measured performance</div><h2>Content &amp; analytics</h2><p class="legend">Explore collected posts, compare observed metrics and review duplicate candidates. Coverage starts when collection begins.</p></div><button class="btn" id="meta-sync">Sync Meta now</button></div>
+ <p id="meta-notice" class="sub" role="status" aria-live="polite"></p>
+ <div class="content-nav" role="tablist" aria-label="Content views">
+  <button class="btn" id="content-nav-inventory" role="tab" aria-controls="content-panel-inventory" aria-selected="true">Library</button>
+  <button class="btn" id="content-nav-compare" role="tab" aria-controls="content-panel-compare" aria-selected="false" tabindex="-1">Compare</button>
+  <button class="btn" id="content-nav-cleanup" role="tab" aria-controls="content-panel-cleanup" aria-selected="false" tabindex="-1">Duplicates &amp; queue</button>
+  <button class="btn" id="content-nav-availability" role="tab" aria-controls="content-panel-availability" aria-selected="false" tabindex="-1">Availability</button>
+ </div>
+ <section id="content-panel-inventory" role="tabpanel" aria-labelledby="content-nav-inventory">
+  <div class="control">
+   <label>Platform<select id="content-platform"><option value="">All platforms</option><option value="instagram">Instagram</option><option value="facebook">Facebook</option><option value="tumblr">Tumblr</option></select></label>
+   <label>Account<select id="content-account"><option value="">All accounts</option></select></label>
+   <label>Search<input id="content-search" class="search" placeholder="Caption or post ID"></label>
+   <button class="btn" id="content-refresh">Refresh library</button>
+  </div>
+  <details class="filter-details"><summary>Dates, layout &amp; export</summary><div class="control">
+   <label>Published from (UTC)<input id="content-from" type="date"></label><label>Published through (UTC)<input id="content-to" type="date"></label>
+   <label>Layout<select id="content-layout"><option value="cards">Media cards</option><option value="table">Compact table</option></select></label>
+   <button class="btn" id="content-export-csv">Export visible CSV</button><button class="btn" id="content-export-json">Export visible JSON</button>
+  </div><p class="legend">Dates filter stored posts on the server. Load more to extend this subset; exports include the visible loaded records only. Account options come from loaded posts and discovered accounts.</p></details>
+  <div id="content-stats" class="stats"></div>
+  <div class="selection-bar"><span id="content-selection-count">Select up to 4 posts on the same platform.</span><button class="btn" id="content-open-compare">Compare selection</button><button class="btn" id="content-clear-selection">Clear selection</button></div>
+  <div id="content-cards" class="content-grid"></div>
+  <div id="content-table-wrap" class="scroll hidden"><table><thead><tr><th>Compare</th><th>Post / account</th><th>Published (UTC)</th><th>Media / state</th><th>Lifetime metrics</th><th>Links</th></tr></thead><tbody id="content-table"></tbody></table></div>
+  <div id="content-empty" class="empty">No content loaded. Refresh the library or sync an available source.</div>
+  <div class="content-footer"><span id="content-page" class="sub"></span><button class="btn hidden" id="content-more">Load more posts</button></div>
+ </section>
+ <section id="content-panel-compare" role="tabpanel" aria-labelledby="content-nav-compare" class="hidden">
+  <h3>Observed performance</h3><p class="legend">Choose 1–4 library posts from the same platform. Lifetime totals favor older posts. Each point is a collection snapshot; lines join observations and do not reconstruct activity between them. Missing metrics stay unknown.</p>
+  <div id="content-compare-selection" class="compare-selection"></div>
+  <div class="control"><label>Metric<select id="content-metric"><option value="views">Views</option><option value="likes">Likes</option><option value="comments">Comments</option><option value="shares">Shares</option><option value="reach">Reach</option><option value="saved">Saves</option><option value="total_interactions">Interactions</option><option value="notes">Tumblr notes</option></select></label><label>Display<select id="content-chart-mode"><option value="cumulative">Cumulative snapshots</option><option value="interval">Observed interval change</option></select></label><button class="btn" id="content-plot">Load chart</button><button class="btn" id="content-chart-export" disabled>Download SVG</button><button class="btn" id="content-series-export" disabled>Download observations CSV</button></div>
+  <p id="content-chart-status" class="sub" role="status">Select posts in the library to begin.</p>
+  <div id="content-chart" class="chart-shell"></div><div id="content-chart-legend" class="chart-legend"></div>
+  <p class="legend">A negative change is a <strong>correction / reset</strong>, never negative growth. Intervals may have different lengths and collection times; compare their start and end timestamps below. These are observed changes, not daily performance.</p>
+  <details><summary>Exact observations &amp; interval boundaries</summary><div class="scroll"><table><thead><tr><th>Post</th><th>Observed UTC</th><th>Cumulative value</th><th>Interval start (UTC)</th><th>Interval change</th><th>Interpretation</th></tr></thead><tbody id="content-observations"></tbody></table></div></details>
+ </section>
+ <section id="content-panel-cleanup" role="tabpanel" aria-labelledby="content-nav-cleanup" class="hidden">
+  <div class="section-heading"><div><h3>Review duplicate candidates</h3><p class="legend">Groups describe similarity evidence within a platform and account. Review the member posts before planning. Similarity is not proof that a post should be removed.</p></div><button class="btn" id="content-cleanup-refresh">Refresh groups &amp; queue</button></div>
+  <div class="control"><label>Candidate group<select id="content-group"><option value="">Choose a group</option></select></label></div>
+  <div id="content-group-info" class="sub"></div><div class="scroll"><table><thead><tr><th>Post / account</th><th>Evidence</th><th>Published (UTC)</th><th>Lifetime metrics</th><th>Open</th></tr></thead><tbody id="content-group-members"></tbody></table></div>
+  <div class="cleanup-plan control"><label>Keep strategy<select id="content-keep-strategy"><option value="">Choose explicitly</option><option value="best">Keep highest metric</option><option value="worst">Keep lowest metric</option></select></label><label>Number to keep<input id="content-keep-count" type="number" min="1" step="1" placeholder="Enter count"></label><label>Rank by<select id="content-keep-metric"><option value="views">Views</option><option value="likes">Likes</option><option value="comments">Comments</option><option value="shares">Shares</option><option value="reach">Reach</option><option value="saved">Saves</option><option value="total_interactions">Interactions</option><option value="notes">Tumblr notes</option></select></label><button class="btn" id="content-plan">Preview removal plan</button></div>
+  <p class="legend">For n eligible members and k retained posts, the preview proposes n − k removals. Missing metrics or already queued members prevent planning until the group is refreshed. Ranking uses lifetime totals and can favor older posts. Creating a preview does not queue links.</p>
+  <div id="content-plan-panel" class="review-panel hidden"><h3 id="content-plan-title">Review removal plan</h3><p id="content-plan-detail"></p><div id="content-plan-records"></div><p class="warning-copy">Confirming writes links to the deletion queue and may send them to the configured clickouts Sheet. A separate automation may act on those links and delete posts. Review every removal before continuing.</p><div class="control"><label><span id="content-confirm-label">Type the confirmation</span><input id="content-confirm" autocomplete="off" spellcheck="false"></label><button class="btn danger" id="content-queue-confirm" disabled>Confirm &amp; queue links</button><button class="btn" id="content-plan-cancel">Cancel plan</button></div></div>
+  <p id="content-cleanup-notice" role="status" aria-live="polite" class="sub"></p>
+  <h3>Deletion queue</h3><p id="content-queue-status" class="legend">No queue status loaded.</p><div class="scroll"><table><thead><tr><th>Post / account</th><th>Status</th><th>Reason</th><th>Queued (UTC)</th><th>Link</th></tr></thead><tbody id="content-queue"></tbody></table></div>
+ </section>
+ <section id="content-panel-availability" role="tabpanel" aria-labelledby="content-nav-availability" class="hidden">
+  <div class="section-heading"><div><h3>Coverage &amp; connection status</h3><p class="legend">A connected account does not guarantee every media type or metric is available. Empty content and missing observations are not zero activity.</p></div><button class="btn" id="content-status-refresh">Refresh status</button></div>
+  <div id="content-system-status" class="status-grid"></div>
+  <details class="filter-details"><summary>Sheet setup &amp; queued writes</summary><p class="legend">Setup creates or verifies the meta-posts-to-id tab and headers. Writing requires the Worker write flag and Google Sheets write scope. Sync processes pending post mappings and previously confirmed deletion links; clickouts links may trigger a separate deletion workflow.</p><div class="control"><button class="btn" id="content-sheet-setup">Set up post mapping Sheet</button><button class="btn" id="content-sheet-sync">Run queued Sheet writes</button></div><p id="content-sheet-notice" class="sub" role="status"></p></details>
+  <h3>Connected Meta accounts</h3><div class="scroll"><table><thead><tr><th>Platform</th><th>Account</th><th>Account ID</th><th>Last stored update</th></tr></thead><tbody id="content-assets"></tbody></table></div>
+  <h3>Metric availability</h3><div class="scroll"><table><thead><tr><th>Asset / media</th><th>Metric</th><th>Status</th><th>Reason</th><th>Checked (UTC)</th></tr></thead><tbody id="content-capabilities"></tbody></table></div>
+ </section>
+</section>

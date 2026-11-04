@@ -1,0 +1,96 @@
+{
+  "name": "SH01 register published post",
+  "active": false,
+  "nodes": [
+    {
+      "id": "61ab056b-e905-5513-abd2-9c3db8dce8c8",
+      "name": "Published post input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Call only after final publication succeeds. Input post_id is the final published object ID, never an upload/container ID.",
+      "notesInFlow": true
+    },
+    {
+      "id": "3f56a4d5-d8fb-5443-b758-bffb604c043f",
+      "name": "Validate published record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// n8n Code node, Run Once for All Items. Output contains only registry metadata.\n// A numeric ID cannot reveal whether it is a published object or an upload container.\n// The caller must attach this hook to verified final publish success, never upload.\nconst fields = ['platform', 'account_id', 'account_handle', 'post_id', 'permalink',\n  'media_type', 'published_at', 'workflow_id', 'workflow_url'];\nconst mediaTypes = new Set(['IMAGE', 'VIDEO', 'REELS', 'STORY', 'CAROUSEL', 'CAROUSEL_ALBUM', 'POST']);\nfunction parts(value) {\n  if (/[\\s\\\\]/.test(value)) throw new Error('Invalid URL');\n  const m = value.match(/^https:\\/\\/([A-Za-z0-9.-]+)(\\/[^?#]*)?(?:\\?([^#]*))?(?:#(.*))?$/);\n  if (!m) throw new Error('Expected an HTTPS URL without credentials or a port');\n  return {host: m[1].toLowerCase().replace(/^www\\./, ''), path: m[2] || '/', query: m[3] || '', hash: m[4] || ''};\n}\nreturn $input.all().flatMap((item, index) => {\n  const input = item.json;\n  // Instrumented branches carry an explicitly configured publish-success predicate.\n  if (Object.hasOwn(input, '__sh01_publish_success') && input.__sh01_publish_success !== true) return [];\n  const out = {};\n  for (const key of fields) {\n    if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error('Missing or invalid published-post field: ' + key);\n    out[key] = input[key].trim();\n  }\n  if (!['facebook', 'instagram', 'tumblr'].includes(out.platform)) throw new Error('Unsupported platform');\n  for (const key of ['account_id', 'post_id', 'workflow_id']) {\n    if (!/^[A-Za-z0-9_.:@-]{1,160}$/.test(out[key])) throw new Error('Invalid identifier: ' + key);\n  }\n  if (out.account_handle.length > 150 || !mediaTypes.has(out.media_type)) throw new Error('Invalid handle or media type');\n  if (!/^\\d{4}-\\d{2}-\\d{2}T.+(?:Z|[+-]\\d{2}:\\d{2})$/.test(out.published_at) || !Number.isFinite(Date.parse(out.published_at))) throw new Error('published_at must be a timestamp with timezone');\n  out.published_at = new Date(out.published_at).toISOString();\n  const u = parts(out.permalink), h = u.host;\n  if (out.platform === 'instagram' && !(h === 'instagram.com' && /^\\/(p|reel|tv)\\/[A-Za-z0-9_-]+\\/?$/.test(u.path))) throw new Error('Unsupported Instagram permalink');\n  if (out.platform === 'facebook' && !(['facebook.com', 'm.facebook.com', 'web.facebook.com'].includes(h) && (/\\/(posts|videos)\\//.test(u.path) || /^\\/reel\\//.test(u.path) || /(?:^|&)(story_fbid|v)=/.test(u.query)))) throw new Error('Unsupported Facebook permalink');\n  if (out.platform === 'tumblr' && !((h.endsWith('.tumblr.com') && /^\\/post\\/\\d+(?:\\/|$)/.test(u.path)) || (h === 'tumblr.com' && /^\\/[A-Za-z0-9_-]+\\/\\d+(?:\\/|$)/.test(u.path)))) throw new Error('Unsupported Tumblr permalink');\n  for (const pair of u.query.split('&')) if (/token|secret|password|api.?key|signature|authorization/i.test(decodeURIComponent(pair.split('=')[0]))) throw new Error('Secret-bearing permalink rejected');\n  const workflow = parts(out.workflow_url);\n  if (workflow.query || workflow.hash || !workflow.path.endsWith('/workflow/' + out.workflow_id)) throw new Error('workflow_url must identify the supplied workflow_id');\n  return [{json: out, pairedItem: {item: index}}];\n});\n"
+      },
+      "position": [
+        300,
+        0
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "88a359ea-b7e7-5293-a23b-0fe82246e7be",
+      "name": "Register published post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://sh01-operations-dashboard-cloudflare.vivojaymail.workers.dev/api/ingest/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { posts: [$json] } }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "notesInFlow": true,
+      "notes": "SH01 published-post registration v1\nBind an HTTP Header Auth credential: header X-INGEST-KEY. No credential is bundled. Ingestion failure fails this branch; never retry the publisher to repair the ledger."
+    }
+  ],
+  "connections": {
+    "Published post input": {
+      "main": [
+        [
+          {
+            "node": "Validate published record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate published record": {
+      "main": [
+        [
+          {
+            "node": "Register published post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  },
+  "pinData": {},
+  "tags": []
+}

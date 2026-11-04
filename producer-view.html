@@ -16,6 +16,10 @@
  <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Status</th><th>Workflow association</th><th>Source fetch</th><th>Items</th></tr></thead><tbody id="producers"></tbody></table></div>
  <div id="producer-empty" class="empty hidden">No matching verified stock. Queue a Sheets sync if this is the first run after the correction.</div>
  <div id="item-panel" class="hidden"><button class="btn" id="close-items">Close items</button><h3 id="item-title">Items</h3><p class="sub">Links only; no media downloaded. All pages belong to the same snapshot. Links requiring expired signed credentials may need refreshing at the source.</p><div class="scroll"><table><thead><tr><th>Tab / row / creator</th><th>Item link</th><th>Status</th><th>Approved</th><th>Eligibility</th></tr></thead><tbody id="items"></tbody></table></div><button class="btn hidden" id="more-items">Load more items</button></div>
+ <details class="schedule-panel"><summary>Workflow schedule <span class="sub">· configured times and source evidence</span></summary>
+  <p class="legend">Times below reproduce the workflow-schedule values. A configured time does not prove a run occurred. No next-run time is inferred from these records.</p><p id="schedule-evidence" class="sub"></p>
+  <div class="scroll"><table><thead><tr><th>Workflow / Sheet row</th><th>Account routing</th><th>Configured timing</th><th>Run setting</th><th>Resolution</th></tr></thead><tbody id="schedule-rows"></tbody></table></div>
+ </details>
  <hr style="border:0;border-top:1px solid #465666;margin:32px 0">
  <h3>Workflow source &amp; dependency register</h3>
  <p id="source-coverage" class="legend"></p>

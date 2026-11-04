@@ -5,3 +5,7 @@
 .env
 .env.*
 __pycache__/
+
+
+PRIVATE-D1-BACKUPS/
+*.partial
