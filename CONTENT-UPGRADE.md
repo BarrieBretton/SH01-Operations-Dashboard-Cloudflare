@@ -1,5 +1,7 @@
 # Published content, previews, schedules and cleanup
 
+See [CONFIGURATION-MATRIX.md](CONFIGURATION-MATRIX.md) for every runtime setting and [DEPLOYMENT-TRACKER.md](DEPLOYMENT-TRACKER.md) for the staged rollout. The documentation follow-up adds `keep_vars: true` so Git deploys preserve ordinary UI-managed variables.
+
 ## What this change delivers
 
 Three main dashboard sections remain: Failures, Producers, and Content & analytics. Content has Library, Compare, Cleanup, and Availability panels. The library has platform badges, preview controls, per-post metadata, filters, and original links. Comparisons show observed totals/intervals and corrections; CSV/SVG exports preserve provenance. Producer schedules come from **workflow-schedule**, with exact timings, run text, account associations and workflow links, labeled Asia/Kolkata. It does not invent a next run from arbitrary sheet text.

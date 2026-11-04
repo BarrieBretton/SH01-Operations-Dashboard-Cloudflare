@@ -14,6 +14,16 @@ The existing SH01 app and deployment were not changed by preparing these files. 
 
 ## 1. Install in the SH01 Python repository
 
+Preferred for the inspected SH01 checkout: run the documentation follow-up patch
+from the dashboard checkout with `--fastapi-repo` pointing to that separate repo.
+It installs **social_inventory.py and social_delete.py**, registers both routers,
+adds `oauthlib>=3.3,<4` directly to the existing Docker-consumed requirements.txt,
+and writes README/handbook/subsystem documentation in that repo. It preserves unrelated app.py edits after validating the FastAPI constructor
+and router bindings, and refuses conflicting requirements.txt edits. No cloud operation is performed.
+The manual inventory-only setup below is an alternative; include the deletion
+router separately if needed. See the complete [configuration register](../CONFIGURATION-MATRIX.md).
+
+
 Copy `social_inventory.py` and `requirements-social.txt` next to the existing SH01 `app.py`. Keep the test file in your development checkout.
 
 Use your existing project virtual environment, or create an isolated one for local verification:
@@ -214,3 +224,17 @@ The tests do not require live credentials, platform traffic, Node or a dashboard
 - [Tumblr official NPF format](https://github.com/tumblr/docs/blob/master/npf-spec.md)
 
 Meta reference pages were unavailable to the documentation retrieval tool during preparation. The implementation uses the existing dashboard's Graph API version baseline and must be checked against your actual app/token before activation.
+
+
+## Deletion companion
+
+`social_delete.py` is separate from the read/ingest scanner. Install it beside
+`social_inventory.py`; include `social_delete.router` in app.py. The optional
+cross-repo patch installs both. It exposes POST `/social/posts/delete` with the
+same inventory X-API-KEY. Default `dry_run:true` verifies registry resolution and
+remote ownership; it does not delete a post. Actual execution requires
+`SOCIAL_DELETE_ENABLED=1`, account `allow_delete:true`, `dry_run:false` and the
+exact preview confirmation. Leave deletion disabled during setup. See
+[workflow integration](../workflows/README.md) and [rollout tracker](../DEPLOYMENT-TRACKER.md).
+No automatic scanner/deleter schedule is installed. Existing clickouts consumers
+must be considered before appending any real deletion links.

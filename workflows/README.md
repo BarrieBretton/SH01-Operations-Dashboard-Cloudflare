@@ -18,7 +18,7 @@ The source register in `../producer-sources.json` contains metadata for 70 expor
 
 1. In n8n, import `register-published-post.n8n.json` as a new workflow. Leave it inactive during setup.
 2. Create an **HTTP Header Auth** credential with header name **`X-INGEST-KEY`** and the dashboard's `INGEST_TOKEN` as its value. Select it on **Register published post**. Neither a credential ID nor a value is bundled.
-3. After a final publish operation has succeeded, map the ten fields below with Edit Fields. Call this child through Execute Sub-workflow, passing the normalized items. Select the imported child by its actual n8n ID; this package does not guess it. Configure the caller to wait for completion while validating the integration.
+3. After a final publish operation has succeeded, map the nine fields below with Edit Fields. Call this child through Execute Sub-workflow, passing the normalized items. Select the imported child by its actual n8n ID; this package does not guess it. Configure the caller to wait for completion while validating the integration.
 4. Check one known published item in the dashboard, then decide whether to publish/enable the parent workflow. n8n versions differ in child publication requirements; use the UI's validation and do not automatically activate unrelated workflows. An inactive flag alone is not an authorization boundary for manually invoked subworkflows.
 
 Every required value must be a nonempty string. Keep all provider IDs as strings from their original JSON response; converting an already-rounded JavaScript number to text cannot recover it. Accepted media types are `IMAGE`, `VIDEO`, `REELS`, `STORY`, `CAROUSEL`, `CAROUSEL_ALBUM`, and `POST`.

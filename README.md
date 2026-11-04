@@ -1,21 +1,37 @@
 # SH01 Operations Desk
 
+## Current content upgrade: start here
+
+For the existing **sh01-operations-dashboard-cloudflare** deployment, use
+[CONFIGURATION-MATRIX.md](CONFIGURATION-MATRIX.md) and
+[DEPLOYMENT-TRACKER.md](DEPLOYMENT-TRACKER.md), then [CONTENT-UPGRADE.md](CONTENT-UPGRADE.md).
+The operator has applied the local content patch and rebuilt the Worker; cloud
+migration/deployment and optional FastAPI/n8n connections still need verification.
+Do not follow the historical new-database instructions below to recreate this
+existing deployment. Runtime variables are preserved by `keep_vars: true`.
+
+The Python follow-up patch can also install the companion into the separate
+`sh01-fastapi-server` checkout with `--fastapi-repo PATH`, updating its code,
+README, handbook and configuration docs together. Neither patch pushes/deploys
+or activates provider deletion. Run Node tests in a permitted CI/developer
+runtime; no Node installation is required on the operator's Windows machine.
+
+
 ## Producer correctness update
 
 Read [the audit and deployment guide](docs/PRODUCER-AUDIT.md) for the current source model. The live stock table requires a successful **Queue Sheets sync** after this upgrade. Existing archive rows remain in D1 but are not shown as verified live stock.
 
 The source register includes all 70 exported workflows and explicit Drive, Pinterest, Telegram, other Sheet and API dependencies. It does not infer sources from account names. Unknown external inventory is shown as unknown, not zero.
 
-Tests: `node --test producers.test.mjs ui.test.mjs smoke.test.mjs` and `python -m unittest discover -p test_producers.py`. The patch preserves existing bindings, secrets and the ten-minute Sheets cron; no new migration is needed.
+Tests: `node --test producers.test.mjs ui.test.mjs smoke.test.mjs` and `python -m unittest discover -p test_producers.py`. The patch preserves existing bindings, secrets and the ten-minute Sheets cron; that producer-only patch needed no migration. The later content upgrade DOES require `content-schema.sql`.
 
 
 A single-file, framework-free Cloudflare Worker serves a private HTML/CSS/JS
 dashboard and stores event metadata and producer inventory in a dedicated D1
 database. No npm install, Wrangler, database password, or third-party UI
-library is needed to run it. The SH01 repository and live n8n instances are
-read-only inputs; this package does not change their workflows.
+library is needed to run it. The original archive collector reads SH01/n8n exports. The optional content companion and workflow templates below require explicit installation in their own services.
 
-## Deploy in the Cloudflare dashboard
+## Initial deployment reference (existing deployment: use the upgrade guide)
 
 1. Create a **new, dedicated D1 database** (for example `sh01-ops-desk`) in
    **Storage & databases → D1**. Open its SQL console and run `schema.sql`.

@@ -39,3 +39,20 @@ Baseline dashboard commit db554c98391e99089b6667f4851175e35ebda685. New content-
 Source-confirmed: strict producer eligibility retained; workflow-schedule timings/links rendered; D1 mapping projection uses meta-posts-to-id; explicit plans can append clickouts URLS; deletion requires a separate configured executor and typed confirmation. The write flag does not grant OAuth scopes. Meta collection is bounded and per-asset/metric partial, not an assertion of complete platform analytics.
 
 Operator-observed at previous checkpoint: successful live Sheets sync, seven stock pools, 1,291 items checked, 70 exported workflows. This evidence does not validate the new content collector. New source remains locally tested only until deployed and verified. Unknown provider permissions, complete publishing-hook coverage and present n8n runtime graphs remain explicit.
+
+
+## Documentation/configuration follow-up (November 4, 2026)
+
+[Configuration register](../CONFIGURATION-MATRIX.md) lists service-specific
+secrets, flags, sheets, credentials and schedules. [Deployment tracker](../DEPLOYMENT-TRACKER.md)
+separates the operator-reported local patch/rebuild from unverified rollout.
+`wrangler.jsonc` now retains UI-managed ordinary variables via `keep_vars: true`.
+The optional cross-repo installer updates the SH01 FastAPI README/handbook,
+router assembly, explicit dependency and subsystem docs together. It does not
+activate services. Existing `OPS_INGEST_TOKEN` error collection and new companion
+`INGEST_TOKEN` are distinct variable names with the same ingestion destination.
+Update these registers with non-secret commit/version/runtime evidence.
+
+Installer correction: app.py wiring now uses a validated syntax-tree location,
+preserving unrelated local edits. Full-file hashing still protects other code
+replacements. A failed validation changes neither selected repository.
