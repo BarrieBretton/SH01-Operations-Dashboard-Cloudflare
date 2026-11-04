@@ -28,37 +28,29 @@
    Cron configuration can take time to propagate.
 7. Check Google Sheets status=ok, last successful SOURCE FETCH, and no error_code.
 
-## Scope and semantics
-- Reads streamables, streamables-yt, workflow-schedule, columns A:Z, header row 1.
-- Required stock headers: account, creator_handle, status, approved.
-- Links use yt_link or public drive link; ready/consumed rules match sync.py.
-- Accounts appearing only in workflow-schedule are Unknown, not consumed.
-- Preserves seeded workflow references and warning thresholds by producer ID;
-  new groups default to threshold 3. Does not inspect live n8n workflow logic.
-- Existing archive records are never labelled live. Once a live snapshot exists,
-  it supersedes archived stock/schedule groups. Workflow-only archive references
-  remain explicitly labelled unverified.
-- D1 publishes a complete staged snapshot with one active-version pointer.
-  Failed reads, missing tabs/headers, and row-limit failures retain the previous
-  good version. No in-place partial inventory replacement.
-- Uses a five-minute lease to avoid overlap, bounded retries and HTTP timeouts.
-  Source status records last attempt, last success and sanitized failure category.
-- More than 20,000 rows per tab aborts the run. Rows are read in one request per
-  tab so internal blank-row gaps cannot silently truncate subsequent data.
-- Freshness means fetch time, NOT the last user edit time in Google Sheets.
-  The three tab reads are not a Google-side transactional snapshot.
-- Stale after thirty minutes. Failed recent sync and freshness are separate:
-  a previous successful snapshot may still be recent, while status reports failed.
-- No media files downloaded. Google access/refresh tokens never stored in D1.
-- Sync is read-only to Google; it writes only the dashboard D1 tables.
-- Worker resource limits can still stop oversized runs; expired running leases
-  are retried on the next cron. Monitor source status and Worker logs.
-- This replaces the old scheduled Meta call: Meta stays manual pending diagnosis.
-  It does not automate n8n error ingestion, FastAPI error hooks, or Meta analytics.
+## Scope and semantics — v2 producer correction
+
+- Required stock tabs: streamables and streamables-yt. Required columns: account, approved, and status (or state). Creator is optional metadata.
+- Only trimmed/case-insensitive staged + yes is eligible. Uploaded is consumed. Conflicting status/state values are ineligible.
+- Groups are per workbook/tab/account. No cross-tab merging or account-name source guessing.
+- workflow-schedule is routing evidence, not inventory. Failure to read it is shown explicitly and clears routing assumptions for that snapshot.
+- Explicitly allowlisted other tabs provide state summaries, with unavailable counts represented as unknown. They do not receive Streamables eligibility rules.
+- Unknown Drive, Pinterest, Telegram and dynamic sources are visible in the workflow source register. Their private configuration and live authorization are not inferred from Sheets access.
+- Old inferred stock rows remain stored but are hidden from live inventory. Queue Sheets sync after the correction deploys.
+- D1 publishes complete required-stock snapshots atomically with a five-minute lease. Failed required reads retain last good stock and mark it stale.
+- At most 20,000 rows per tab; larger reads fail explicitly. Required headers and duplicates are checked. Reads cover A:AZ and do not stop at blank rows.
+- Snapshot freshness means fetch time, not the last Google edit time. Multiple tab reads are not a Google-side transaction.
+- Automatic cron is every ten minutes; UI refresh reads D1 and does not itself sync.
+- No media downloads or upstream mutations. Credentials stay server-side in memory. Queue summary values and full workflow parameters are not returned.
+- The existing scheduled handler runs Sheets, not Meta. Meta remains manual.
+
+See docs/PRODUCER-AUDIT.md for the evidence, known gaps and optional threshold setting.
 
 ## Tests
-node --test sheets.test.mjs
-Tests use synthetic data and in-memory SQLite, not your Google credentials.
-Official references:
+node --test producers.test.mjs sheets.test.mjs ui.test.mjs smoke.test.mjs
+python -m unittest discover -p test_producers.py
+
+## Official references
 https://developers.cloudflare.com/workers/configuration/cron-triggers/
 https://developers.google.com/identity/protocols/oauth2/web-server
+https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/get

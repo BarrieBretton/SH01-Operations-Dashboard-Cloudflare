@@ -49,9 +49,7 @@ def normalize(s):
 
 def ready(approved, status):
     a, s = normalize(approved).lower(), normalize(status).lower()
-    return a in ("yes", "true", "approved", "1", "y") and s not in (
-        "used", "published", "consumed", "done", "posted", "completed", "deleted",
-    )
+    return a == "yes" and s == "staged"
 
 
 def workbook_tabs(z, spreadsheet_id, access_token):
@@ -87,69 +85,40 @@ def dictionaries(rows):
 
 
 def ingest_producers(z, host, token, spreadsheet_id, access_token, threshold):
-    workflows = [json.loads(line) for line in z.read("n8n_workflow_review/workflows.jsonl").splitlines() if line]
-    # Workflow text is already redacted in this export; use it only to identify
-    # references, never store node bodies or values in the dashboard.
-    refs = [(normalize(w.get("name")), json.dumps(w.get("nodes", []), ensure_ascii=False).lower()) for w in workflows]
+    # Archive metadata is retained separately from the live v2 stock snapshot.
+    # Associations come from audit_sources.py and the live schedule, not names.
     groups = defaultdict(list)
-    seen_names = set()
-    schedule_accounts = set()
+    sid = spreadsheet_id or json.loads(z.read("core_sheets/index.json")).get("spreadsheet_id", "archive-workbook")
     for title, rows in workbook_tabs(z, spreadsheet_id, access_token):
         for row_number, row in enumerate(dictionaries(rows), 2):
             if title == "workflow-schedule":
-                for account in normalize(row.get("associated accounts")).split(","):
-                    if account.strip():
-                        schedule_accounts.add(account.strip())
                 continue
-            account = normalize(row.get("account"))
+            if not any(normalize(v) for v in row.values()):
+                continue
+            account = normalize(row.get("account")).lstrip("@").lower()
             creator = normalize(row.get("creator_handle"))
-            if not account and not creator:
-                account = "Unattributed / " + title
-            name = account or creator
-            producer_id = hashlib.sha256((account.lower() + "\0" + creator.lower()).encode()).hexdigest()[:32]
-            seen_names.add(name.lower())
+            producer_id = hashlib.sha256(json.dumps(["archive-sheet-v2", sid, title, account],separators=(",", ":")).encode()).hexdigest()[:32]
             group = groups[producer_id]
+            status, state = normalize(row.get("status")).lower(), normalize(row.get("state")).lower()
+            conflict = bool(status and state and status != state)
+            effective = status or state
             entry = {"item_id": title + ":" + str(row_number),
-                     "item_label": normalize(row.get("caption"))[:140] or "Row " + str(row_number),
+                     "item_label": "Row " + str(row_number),
                      "item_url": normalize(row.get("yt_link")) or normalize(row.get("public drive link")),
-                     "status": normalize(row.get("status")), "approved": normalize(row.get("approved")),
-                     "ready": ready(row.get("approved"), row.get("status")), "origin": title}
-            group.append((account, creator, entry))
+                     "status": effective, "state": state, "approved": normalize(row.get("approved")),
+                     "ready": not conflict and ready(row.get("approved"), effective), "origin": title}
+            group.append((account, title, entry))
     for producer_id, tuples in groups.items():
-        account, creator = tuples[0][:2]
-        words = tuple(s for s in (account, creator) if len(s) >= 3)
-        used_by = sorted({name for name, contents in refs if any(s.lower() in name.lower() or s.lower() in contents for s in words)})[:100]
+        account, title = tuples[0][:2]
         items = [t[2] for t in tuples]
         for offset in range(0, max(1, len(items)), 300):
             post(host, token, "/api/ingest/producer", {
-                "producer_id": producer_id, "name": account or creator, "account": account,
-                "creator_handle": creator, "threshold": threshold,
-                "workflow_names": used_by, "sheet_backed": True,
+                "producer_id": producer_id, "name": (account or "Unattributed") + " / " + title, "account": account,
+                "creator_handle": "", "threshold": threshold,
+                "workflow_names": [], "sheet_backed": True,
                 "reset": offset == 0, "items": items[offset:offset + 300],
             })
-    # Accounts mentioned by the scheduling sheet but without a stock row are
-    # surfaced as unknown, not incorrectly shown as consumed.
-    for name in sorted(schedule_accounts):
-        if name.lower() in seen_names:
-            continue
-        producer_id = hashlib.sha256(("schedule\0" + name.lower()).encode()).hexdigest()[:32]
-        post(host, token, "/api/ingest/producer", {
-            "producer_id": producer_id, "name": name, "account": name,
-            "sheet_backed": False, "workflow_names": sorted({w for w, s in refs if name.lower() in s})[:100],
-            "threshold": threshold, "reset": True, "items": [],
-        })
-    workflow_only = 0
-    for name, _ in refs:
-        if "producer" not in name.lower() or name.lower() in seen_names:
-            continue
-        producer_id = hashlib.sha256(("workflow\0" + name.lower()).encode()).hexdigest()[:32]
-        post(host, token, "/api/ingest/producer", {
-            "producer_id": producer_id, "name": name, "sheet_backed": False,
-            "workflow_names": [name], "threshold": threshold, "reset": True, "items": [],
-        })
-        workflow_only += 1
-    print("Producer groups synchronized:", len(groups), "schedule-only:",
-          len(schedule_accounts - seen_names), "workflow-only:", workflow_only)
+    print("Archive stock groups retained:", len(groups), "; queue a Sheets sync for the dashboard's live inventory.")
 
 
 def ingest_snapshot_failures(z, host, token, workflow_url):
@@ -230,3 +199,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

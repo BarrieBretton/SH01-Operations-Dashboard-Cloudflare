@@ -1,0 +1,33 @@
+# Dashboard producer subsystem
+
+This handbook describes the Cloudflare Operations Dashboard correction, not the FastAPI server's deployment handbook.
+
+## Entry points
+
+- `dashboard.html`: editable dashboard; producer markup/logic are embedded from `producer-view.html` and `producer-view.js` by `build_ui.py`.
+- `producer-policy.js`: authoritative Streamables eligibility, consumed states, threshold provenance, URL handling.
+- `sheets-sync.js`: OAuth refresh, read-only Sheets collection, D1 version publication, source/state API.
+- `audit_sources.py` → `producer-sources.json`: metadata-only workflow source register.
+- `worker.js`: generated UI/register/collector plus existing authenticated APIs and Meta integration. Commit regenerated changes; do not independently edit the generated producer block.
+- `sync.py`: archive importer; archive stock is retained for reference, not presented as live v2 stock.
+- `verify_producers.py`: read-only deployed verification; no secrets or row values printed.
+- `docs/PRODUCER-AUDIT.md`: findings, evidence, tests, deployment and explicit remaining gaps.
+
+## Evidence distinction
+
+**Code-confirmed:** `staged` + `yes`, account aggregation, `count < min_ready_streamables`, source nodes and literal graph links in the inspected handoff.
+
+**Operator-reported:** Google OAuth/Sheets read preflight previously passed; dashboard is deployed through GitHub/Cloudflare; current account suspension is independently managed.
+
+**Snapshot-observed:** 70 workflows, 3,295 nodes and schedule account associations in the October 29 handoff.
+
+**Unverified:** present n8n graph, hidden CFG values, runtime branch/account selection, live Drive folder mapping, Pinterest fetched-result inventory, Telegram account routing and source-specific authorization. Unknown quantities stay null.
+
+## Invariants
+
+- Do not infer producer sources using substring searches on account or workflow names.
+- Do not merge stock across workbooks/tabs or apply account-level thresholds to individual creators.
+- Every green/amber stock badge must be backed by a successful recent stock snapshot; threshold provenance stays visible.
+- Keep input inventories separate from publisher sinks, search query pools, queues, and generation APIs.
+- No credential values, complete workflow bodies, encrypted backups, or secret-bearing URLs in repository additions.
+- Keep this document and the evidence register updated with relevant code/schema/collector changes.

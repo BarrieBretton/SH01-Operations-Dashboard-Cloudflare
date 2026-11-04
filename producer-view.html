@@ -1,0 +1,35 @@
+<div id="producer-view" class="card hidden">
+ <div class="eyebrow">Source provenance / inventory</div><h2>Producers &amp; workflow inputs</h2>
+ <p class="legend">Stock is eligible only when <strong>status = staged AND approved = yes</strong> (trimmed, case-insensitive). Uploaded is consumed. A workflow association does not prove that a branch ran.</p>
+ <div id="sheet-health" class="legend" role="status">No source snapshot loaded.</div>
+ <button class="btn" id="sheet-sync-now">Queue Sheets sync</button>
+ <div id="producer-stats" class="stats"></div>
+ <details><summary>What these counts mean</summary><p class="legend">The stock table groups by workbook, tab and account, matching the account-level Streamables selector. Creator is item metadata. Low inventory means count &lt; minimum required. The default minimum is 3; the workflow's CFG override was redacted and is unverified. Zero eligible items is different from every item being consumed. Stale snapshots are never shown as currently healthy. Row-state totals for other queues are not eligible media counts.</p></details>
+ <h3>Measured Sheet stock</h3>
+ <div class="control">
+  <label>Search<input id="producer-search" class="search" placeholder="Account, tab, creator, workflow"></label>
+  <label>Status<select id="producer-status"><option value="">All</option><option value="consumed">Consumed</option><option value="empty">No eligible items</option><option value="low">Low inventory</option><option value="ready">Ready</option><option value="stale">Stale</option><option value="unknown">Unknown</option></select></label>
+  <label>Freshness<select id="producer-fresh"><option value="">All snapshots</option><option value="stale">Stale / unverified</option><option value="fresh">Within 30 minutes</option></select></label>
+  <label>Sort<select id="producer-sort"><option value="attention">Needs attention</option><option value="name">Account name</option><option value="remaining">Fewest eligible</option></select></label>
+  <button class="btn" id="refresh-producers">Refresh stored data</button><button class="btn" id="export-producers">Export stock CSV</button>
+ </div>
+ <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Status</th><th>Workflow association</th><th>Source fetch</th><th>Items</th></tr></thead><tbody id="producers"></tbody></table></div>
+ <div id="producer-empty" class="empty hidden">No matching verified stock. Queue a Sheets sync if this is the first run after the correction.</div>
+ <div id="item-panel" class="hidden"><button class="btn" id="close-items">Close items</button><h3 id="item-title">Items</h3><p class="sub">Links only; no media downloaded. All pages belong to the same snapshot. Links requiring expired signed credentials may need refreshing at the source.</p><div class="scroll"><table><thead><tr><th>Tab / row / creator</th><th>Item link</th><th>Status</th><th>Approved</th><th>Eligibility</th></tr></thead><tbody id="items"></tbody></table></div><button class="btn hidden" id="more-items">Load more items</button></div>
+ <hr style="border:0;border-top:1px solid #465666;margin:32px 0">
+ <h3>Workflow source &amp; dependency register</h3>
+ <p id="source-coverage" class="legend"></p>
+ <div class="control">
+  <label>Search<input id="source-search" class="search" placeholder="vlvt.ave, erika.devereux, Telegram, node…"></label>
+  <label>Kind<select id="source-kind"><option value="">All kinds</option></select></label>
+  <label>Scope<select id="source-scope"><option value="inputs">Potential inputs</option><option value="all">All integrations / sinks</option></select></label>
+  <label>Execution evidence<select id="source-state"><option value="relevant">Active or scheduled / reachable</option><option value="all">All exported, including disabled</option><option value="uncertain">Unresolved / disconnected</option></select></label>
+  <button class="btn" id="export-sources">Export source JSON</button>
+ </div>
+ <div class="scroll"><table><thead><tr><th>Workflow / node</th><th>Source &amp; role</th><th>Associated accounts</th><th>Evidence &amp; availability</th></tr></thead><tbody id="source-rows"></tbody></table></div>
+ <p id="source-page" class="sub"></p><button class="btn" id="source-prev">Previous</button> <button class="btn" id="source-next">Next</button>
+ <h3>Other Sheet queues &amp; reference inputs</h3>
+ <p class="legend">Read-only state summaries from explicitly allowed tabs. These counts do not imply published content, eligible media, or an account binding. Drive inventory, Telegram event history, and Pinterest result inventories require their own validated collectors; they are not supplied by a Sheets OAuth check.</p>
+ <div class="scroll"><table><thead><tr><th>Tab</th><th>Read status</th><th>Rows</th><th>State counts</th></tr></thead><tbody id="source-queues"></tbody></table></div>
+ <details><summary>Unresolved routing / code coverage</summary><div id="source-issues" class="sub"></div></details>
+</div>

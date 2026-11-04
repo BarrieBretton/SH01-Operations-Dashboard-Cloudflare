@@ -1,5 +1,14 @@
 # SH01 Operations Desk
 
+## Producer correctness update
+
+Read [the audit and deployment guide](docs/PRODUCER-AUDIT.md) for the current source model. The live stock table requires a successful **Queue Sheets sync** after this upgrade. Existing archive rows remain in D1 but are not shown as verified live stock.
+
+The source register includes all 70 exported workflows and explicit Drive, Pinterest, Telegram, other Sheet and API dependencies. It does not infer sources from account names. Unknown external inventory is shown as unknown, not zero.
+
+Tests: `node --test producers.test.mjs ui.test.mjs smoke.test.mjs` and `python -m unittest discover -p test_producers.py`. The patch preserves existing bindings, secrets and the ten-minute Sheets cron; no new migration is needed.
+
+
 A single-file, framework-free Cloudflare Worker serves a private HTML/CSS/JS
 dashboard and stores event metadata and producer inventory in a dedicated D1
 database. No npm install, Wrangler, database password, or third-party UI
@@ -78,20 +87,18 @@ even before that workflow is installed.
 
 `sync.py` groups media rows by `account` and `creator_handle`, links the
 corresponding `yt_link` values, and records the sheet tab/row, approval and
-status. A row is available only when `approved` is yes/true/approved/1/y and
-its status is not `used/published/consumed/done/posted/completed/deleted`.
-Review those meanings against your actual sheet workflow rules before using
-the colors operationally. Yellow is `1..threshold` ready items; red means
-**every listed item is explicitly marked consumed**; green exceeds the
-threshold. Unapproved-only rows and a producer seen only in the scheduler
-with no stock are **unknown**, not consumed. The
-default threshold is 3; change it with `--threshold 5`.
+status. A row is eligible only when trimmed, case-insensitive `approved=yes` AND
+`status=staged`. `uploaded` is consumed. Conflicting status/state columns are
+ineligible. Stock is grouped by workbook, tab and account; creator is item
+metadata. The inspected workflows warn below `min_ready_streamables`, not at
+or below it. Default 3 is explicitly labelled as an unverified dashboard
+fallback because CFG settings were redacted. Confirmed minimums can be set
+in the Worker variable `PRODUCER_MIN_READY_JSON`.
 
-Workflow references are inferred by matching account and creator names to
-the sanitized workflow definitions. This is a helpful cross-reference, not a
-proof that every producer used in arbitrary node code has been found. Private
-CFG node bodies cannot be searched here. A new live Sheets sync makes stock
-current; it does not guarantee that a scheduled workflow still uses it.
+Account/source associations use exact schedule workflow names, literal
+subworkflow calls and integration nodes. Dynamic or redacted choices stay
+unresolved. Other queue schemas are shown as state summaries, not assigned
+Streamables eligibility. Details and limitations are in the audit guide.
 
 The handoff's readable `execution_entity` rows contain status/timestamps, but
 not saved error traces. Suspended instances and pruned n8n execution history
@@ -123,8 +130,8 @@ This package extends the same dashboard with a Meta tab. Set `META_SYSVAR` as a
 value is never persisted in D1 or returned to the browser. Run `meta-schema.sql`
 in the **same** D1 console after `schema.sql`, then paste the updated
 `worker.js` into the Worker editor and deploy. In Worker Settings → Triggers,
-add a Cron Trigger (for example `*/30 * * * *`) for periodic ingestion; on
-first run press **Sync Meta now** while signed in. Grant the access token the
+the current scheduled handler runs Sheets collection only. Press **Sync Meta now**
+while signed in for Meta collection; adding a cron alone does not change which handler runs. Grant the access token the
 permissions required by your app's Meta Login configuration; a token that
 cannot enumerate `me/accounts` cannot discover all Pages. Refresh the token
 at its issuing source before expiry. The browser never receives it.
@@ -160,8 +167,8 @@ Meta extension, its meta-schema.sql still needs to be run separately.
 - API responses arriving after lock or superseded by newer requests are ignored.
 - Refresh reads stored data; it does not run the collector. Dates labelled source
   sync describe the last ingestion, not proof of an upstream live connection.
-- Limits (2,000 producers / 5,000 items per producer) are disclosed. No automatic
-  source-health or exhaustive producer-discovery claim is made.
+- Items are paginated in snapshot-consistent pages of 200. Source metadata is paged in the UI.
+  Graph inventory is static export evidence, not a claim of current source health.
 - Session expiry is a browser convenience, not rotation of DASHBOARD_TOKEN.
   Worker secret rotation remains the mechanism for revoking that credential.
 
@@ -171,3 +178,4 @@ The older assembly script is removed to prevent overwriting the UI updates.
 Tests: node --test smoke.test.mjs ui.test.mjs.
 UI tests exercise the inline script with a minimal DOM harness. A real browser
 visual pass and live Meta credential validation were unavailable in this run.
+
