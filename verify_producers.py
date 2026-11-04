@@ -3,13 +3,14 @@
 GET requests only. Prints counts/validation results, never credentials or rows.
 """
 import json
+import getpass
 import os
 from urllib.parse import urlencode, urlsplit, quote
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 def main():
- host=os.getenv('OPS_DASHBOARD_URL','').rstrip('/');token=os.getenv('DASHBOARD_TOKEN','')
+ host=os.getenv('OPS_DASHBOARD_URL','https://sh01-operations-dashboard-cloudflare.vivojaymail.workers.dev').rstrip('/');token=os.getenv('DASHBOARD_TOKEN') or getpass.getpass('Dashboard token (hidden): ')
  u=urlsplit(host)
  if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/') or not token:
   raise SystemExit('Set HTTPS OPS_DASHBOARD_URL and DASHBOARD_TOKEN locally.')

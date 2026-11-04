@@ -1,3 +1,7 @@
+<!-- SH01 DIRECT SHEETS FOLLOW-UP BEGIN -->
+> **Current storage instructions:** the existing Cloudflare Worker calls the Google Sheets API directly using its existing Google OAuth credentials. No Apps Script project, gateway URL or gateway secret is required. Follow [SHEETS-MIGRATION.md](SHEETS-MIGRATION.md): deploy with `SHEETS_STORAGE_READY=0`, verify the live write guard and all-table copy, then set `SHEETS_STORAGE_READY=1`. Cloud deployment and cutover remain pending until verified. Existing optional business-sheet write flags and platform credentials remain in their current scopes. Older storage/deployment instructions below are historical where they differ from this guide.
+<!-- SH01 DIRECT SHEETS FOLLOW-UP END -->
+
 # Content upgrade: complete configuration register
 
 Updated 2026-11-04. This register describes the content upgrade, not every legacy SH01 integration. Values marked secret belong in the named service's secret/environment settings, never Git, screenshots, reports or workflow JSON. An API read permission does not prove publish/delete permission.

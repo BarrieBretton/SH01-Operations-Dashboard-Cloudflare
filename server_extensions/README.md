@@ -1,3 +1,7 @@
+<!-- SH01 DIRECT SHEETS FOLLOW-UP BEGIN -->
+> **Current storage instructions:** the existing Cloudflare Worker calls the Google Sheets API directly using its existing Google OAuth credentials. No Apps Script project, gateway URL or gateway secret is required. Follow [../SHEETS-MIGRATION.md](../SHEETS-MIGRATION.md): deploy with `SHEETS_STORAGE_READY=0`, verify the live write guard and all-table copy, then set `SHEETS_STORAGE_READY=1`. Cloud deployment and cutover remain pending until verified. Existing optional business-sheet write flags and platform credentials remain in their current scopes. Older storage/deployment instructions below are historical where they differ from this guide.
+<!-- SH01 DIRECT SHEETS FOLLOW-UP END -->
+
 # SH01 owner social-media inventory companion
 
 This is an optional Python router for the existing SH01 FastAPI server. It reads configured owner accounts on Facebook, Instagram and Tumblr, persists post metadata and fingerprints in the Operations Dashboard, and suggests duplicate **groups for human review**. It does not publish, edit or delete social posts. It does not append links to captions.

@@ -1,0 +1,272 @@
+{
+  "failures": {
+    "keys": [
+      "source",
+      "event_id"
+    ],
+    "columns": [
+      "source",
+      "event_id",
+      "happened_at",
+      "workflow_name",
+      "workflow_url",
+      "severity",
+      "message",
+      "service",
+      "ingested_at"
+    ]
+  },
+  "producers": {
+    "keys": [
+      "producer_id"
+    ],
+    "columns": [
+      "producer_id",
+      "name",
+      "account",
+      "creator_handle",
+      "threshold",
+      "sheet_backed",
+      "workflow_names",
+      "updated_at"
+    ]
+  },
+  "producer_items": {
+    "keys": [
+      "producer_id",
+      "item_id"
+    ],
+    "columns": [
+      "producer_id",
+      "item_id",
+      "item_label",
+      "item_url",
+      "status",
+      "approved",
+      "ready",
+      "origin"
+    ]
+  },
+  "sheet_sync_state": {
+    "keys": [
+      "id"
+    ],
+    "columns": [
+      "id",
+      "status",
+      "active_version",
+      "last_attempt",
+      "last_success",
+      "error_code",
+      "lease",
+      "lease_until"
+    ]
+  },
+  "sheet_live_producers": {
+    "keys": [
+      "version",
+      "producer_id"
+    ],
+    "columns": [
+      "version",
+      "producer_id",
+      "payload",
+      "fetched_at"
+    ]
+  },
+  "sheet_live_items": {
+    "keys": [
+      "version",
+      "producer_id",
+      "item_id"
+    ],
+    "columns": [
+      "version",
+      "producer_id",
+      "item_id",
+      "payload"
+    ]
+  },
+  "meta_assets": {
+    "keys": [
+      "id"
+    ],
+    "columns": [
+      "id",
+      "platform",
+      "name",
+      "page_id",
+      "updated_at"
+    ]
+  },
+  "meta_content": {
+    "keys": [
+      "id"
+    ],
+    "columns": [
+      "id",
+      "asset_id",
+      "platform",
+      "kind",
+      "published_at",
+      "caption",
+      "permalink",
+      "thumbnail_url",
+      "first_seen",
+      "last_seen"
+    ]
+  },
+  "meta_capabilities": {
+    "keys": [
+      "asset_id",
+      "kind",
+      "metric"
+    ],
+    "columns": [
+      "asset_id",
+      "kind",
+      "metric",
+      "status",
+      "reason",
+      "checked_at"
+    ]
+  },
+  "meta_snapshots": {
+    "keys": [
+      "asset_id",
+      "kind",
+      "metric",
+      "observed_at"
+    ],
+    "columns": [
+      "asset_id",
+      "kind",
+      "metric",
+      "observed_at",
+      "value",
+      "source_period"
+    ]
+  },
+  "content_posts": {
+    "keys": [
+      "platform",
+      "account_id",
+      "post_id"
+    ],
+    "columns": [
+      "platform",
+      "account_id",
+      "post_id",
+      "account_handle",
+      "permalink",
+      "media_type",
+      "published_at",
+      "caption",
+      "workflow_id",
+      "workflow_url",
+      "preview_url",
+      "preview_type",
+      "metrics",
+      "fingerprint",
+      "first_seen",
+      "last_seen",
+      "delete_status"
+    ]
+  },
+  "content_observations": {
+    "keys": [
+      "platform",
+      "account_id",
+      "post_id",
+      "observed_at"
+    ],
+    "columns": [
+      "platform",
+      "account_id",
+      "post_id",
+      "observed_at",
+      "metrics"
+    ]
+  },
+  "content_duplicate_groups": {
+    "keys": [
+      "group_id"
+    ],
+    "columns": [
+      "group_id",
+      "platform",
+      "account_id",
+      "media_type",
+      "algorithm",
+      "confidence",
+      "members",
+      "evidence",
+      "updated_at"
+    ]
+  },
+  "content_cleanup_plans": {
+    "keys": [
+      "plan_id"
+    ],
+    "columns": [
+      "plan_id",
+      "group_id",
+      "payload",
+      "source_digest",
+      "expires_at",
+      "committed"
+    ]
+  },
+  "content_deletion_queue": {
+    "keys": [
+      "request_id"
+    ],
+    "columns": [
+      "request_id",
+      "platform",
+      "account_id",
+      "post_id",
+      "permalink",
+      "status",
+      "reason",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  "content_sheet_outbox": {
+    "keys": [
+      "record_key"
+    ],
+    "columns": [
+      "record_key",
+      "kind",
+      "payload",
+      "status",
+      "error_code",
+      "updated_at"
+    ]
+  },
+  "content_jobs": {
+    "keys": [
+      "id"
+    ],
+    "columns": [
+      "id",
+      "status",
+      "lease",
+      "lease_until",
+      "last_attempt",
+      "last_success",
+      "error_code"
+    ]
+  },
+  "content_collect_state": {
+    "keys": [
+      "id"
+    ],
+    "columns": [
+      "id",
+      "payload"
+    ]
+  }
+}

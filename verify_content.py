@@ -14,9 +14,9 @@ def main():
   except HTTPError as e:raise SystemExit('Dashboard HTTP '+str(e.code)) from None
   except (URLError,ValueError,TimeoutError):raise SystemExit('Dashboard unreachable or invalid response') from None
  state=get('/api/content/status')
- if not state.get('schema_ready'):raise SystemExit('Apply content-schema.sql in D1 Console')
- print('PASS content schema and authenticated API')
- print('Sheets writes enabled:',state.get('sheet_write_enabled'))
+ if not state.get('schema_ready'):raise SystemExit('Complete SHEETS-MIGRATION.md setup')
+ print('PASS content storage and authenticated API; backend:',state.get('storage_backend'))
+ print('Optional mapping/clickouts writes enabled:',state.get('sheet_write_enabled'))
  print('Mirror:',json.dumps(state.get('mirror')))
  print('Meta collector:',json.dumps(state.get('meta_sync')))
  print('Pending/uncertain/synced mirror counts:',json.dumps(state.get('outbox')))

@@ -69,12 +69,11 @@ function referenceSummary(title,rows){
  const counts={};for(const {data:r} of rows){let s=producerStatusValue(r).value||'unspecified';if(!/^[a-z_ -]{1,40}$/.test(s))s='other';counts[s]=(counts[s]||0)+1}
  return {tab:title,rows:rows.length,status_counts:counts,ready_count:null,remaining:null,measurement:'row_states_only',reason:'This schema is not the staged + approved=yes stock contract. Row counts are not available media counts.'};
 }
-function safeSheetError(e){return /^(missing_GOOGLE_[A-Z_]+|google_http_\d+|google_network_timeout|google_invalid_json|google_refresh_failed|sheet_[a-z_]+)$/.test(e.message)?e.message:'sync_internal_error'}
+function safeSheetError(e){return /^(missing_GOOGLE_[A-Z_]+|google_http_\d+|google_network_timeout|google_invalid_json|google_refresh_failed|sheet_[a-z_]+)$/.test(e.message)?e.message:(/^(store_|sheets_storage_)/.test(e.message)?e.message:'sync_internal_error')}
 async function sheetSync(env){
- const db=env.DB,lease=crypto.randomUUID(),started=new Date().toISOString();
- await db.prepare("INSERT OR IGNORE INTO sheet_sync_state(id,status) VALUES(1,'never')").run();
- const acquired=await db.prepare("UPDATE sheet_sync_state SET lease=?,lease_until=?,last_attempt=?,status='running' WHERE id=1 AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+300000,started,Date.now()).run();
- if(!acquired.meta.changes)return {status:'already_running'};
+ const db=env.STORE,lease=crypto.randomUUID(),started=new Date().toISOString();
+ const acquired=await db.claim('sheet_sync_state',1,lease,300000);
+ if(!acquired)return {status:'already_running'};
  const version=crypto.randomUUID();
  try{
   const token=await sheetToken(env),tables=[];
@@ -87,44 +86,50 @@ async function sheetSync(env){
   for(const title of REFERENCE_TABS){try{references.push({...referenceSummary(title,sheetRows(await readSheet(env,token,title),title)),status:'ok'})}catch(e){references.push({tab:title,status:'unavailable',error_code:safeSheetError(e),rows:null,ready_count:null})}}
   let clickouts={status:'unavailable',rows:[]};
   try{const rows=sheetRows(await readSheet(env,token,'clickouts'),'clickouts');if(rows.some(r=>!Object.hasOwn(r.data,'urls')))throw Error('sheet_required_columns_missing');const links=rows.map(r=>({row:r.row,permalink:producerURL(r.data.urls)})).filter(r=>r.permalink);clickouts={status:'ok',rows:links.slice(0,500),total_rows:rows.length,truncated:links.length>500};}catch(e){clickouts.error_code=safeSheetError(e)}
-  const fetched=new Date().toISOString();let batch=[];
-  const flush=async()=>{if(batch.length){await db.batch(batch);batch=[]}};
-  for(const g of groups.values()){
-   const payload={...g,items:undefined,total_count:g.items.length,ready_count:g.items.reduce((n,i)=>n+i.ready,0),consumed_count:g.items.reduce((n,i)=>n+i.consumed,0),status_conflicts:g.items.filter(i=>i.status_conflict).length};
-   batch.push(db.prepare('INSERT INTO sheet_live_producers(version,producer_id,payload,fetched_at) VALUES(?,?,?,?)').bind(version,g.producer_id,JSON.stringify(payload),fetched));
-   for(const i of g.items){batch.push(db.prepare('INSERT INTO sheet_live_items(version,producer_id,item_id,payload) VALUES(?,?,?,?)').bind(version,g.producer_id,i.item_id,JSON.stringify(i)));if(batch.length>=80)await flush()}
-   if(batch.length>=80)await flush();
-  }
-  batch.push(db.prepare('INSERT INTO sheet_live_producers(version,producer_id,payload,fetched_at) VALUES(?,?,?,?)').bind(version,SOURCE_META_ID,JSON.stringify({policy_version:2,routes,schedule_state:scheduleState,schedule_error:scheduleError,references,clickouts,collection_started:started,collection_finished:fetched,required_tabs:STOCK_TABS}),fetched));
-  await flush();
-  const published=await db.prepare("UPDATE sheet_sync_state SET active_version=?,last_success=?,status='ok',error_code=NULL,lease=NULL,lease_until=NULL WHERE id=1 AND lease=? AND lease_until>?").bind(version,fetched,lease,Date.now()).run();
-  if(!published.meta.changes)throw Error('sheet_lease_expired');
-  // Best-effort garbage collection must not relabel a published snapshot as failed.
-  try{const cutoff=new Date(Date.now()-3600000).toISOString();await db.prepare("DELETE FROM sheet_live_items WHERE version IN (SELECT DISTINCT version FROM sheet_live_producers WHERE fetched_at<? AND version<>(SELECT active_version FROM sheet_sync_state WHERE id=1))").bind(cutoff).run();await db.prepare("DELETE FROM sheet_live_producers WHERE fetched_at<? AND version<>(SELECT active_version FROM sheet_sync_state WHERE id=1)").bind(cutoff).run()}catch{}
+  const fetched=new Date().toISOString();
+  await db.transact(['sheet_sync_state','sheet_live_producers','sheet_live_items'],tx=>{
+   const state=tx.find('sheet_sync_state',{id:1});if(state.lease!==lease||state.lease_until<Date.now())throw Error('sheet_lease_expired');
+   // Fixed storage version + per-row diff avoids rewriting 1,291 unchanged items.
+   const stable='sheets-v1',oldItems=tx.rows('sheet_live_items'),oldGroups=tx.rows('sheet_live_producers');
+   const nextItems=[],nextGroups=[];
+   for(const g of groups.values()){
+    const payload={...g,items:undefined,total_count:g.items.length,ready_count:g.items.reduce((n,i)=>n+i.ready,0),consumed_count:g.items.reduce((n,i)=>n+i.consumed,0),status_conflicts:g.items.filter(i=>i.status_conflict).length};
+    nextGroups.push({version:stable,producer_id:g.producer_id,payload:JSON.stringify(payload),fetched_at:fetched});
+    for(const item of g.items)nextItems.push({version:stable,producer_id:g.producer_id,item_id:item.item_id,payload:JSON.stringify(item)});
+   }
+   nextGroups.push({version:stable,producer_id:SOURCE_META_ID,payload:JSON.stringify({policy_version:2,routes,schedule_state:scheduleState,schedule_error:scheduleError,references,clickouts,collection_started:started,collection_finished:fetched,required_tabs:STOCK_TABS}),fetched_at:fetched});
+   // Imported historical snapshots are retained. Replace only the current fixed slot.
+   tx.remove('sheet_live_items',{version:stable});tx.remove('sheet_live_producers',{version:stable});
+   for(const row of nextItems)tx.put('sheet_live_items',row);for(const row of nextGroups)tx.put('sheet_live_producers',row);
+   Object.assign(state,{active_version:stable,last_success:fetched,status:'ok',error_code:null,lease:null,lease_until:null});
+  });
   return {status:'ok',producers:groups.size,fetched_at:fetched};
  }catch(e){
-  try{await db.batch([db.prepare('DELETE FROM sheet_live_items WHERE version=?').bind(version),db.prepare('DELETE FROM sheet_live_producers WHERE version=?').bind(version)])}catch{}
-  const code=safeSheetError(e);await db.prepare("UPDATE sheet_sync_state SET status='failed',error_code=?,lease=NULL,lease_until=NULL WHERE id=1 AND lease=?").bind(code,lease).run();return {status:'failed',error_code:code};
+  const code=safeSheetError(e);await db.finish('sheet_sync_state',1,lease,{status:'failed',error_code:code});return {status:'failed',error_code:code};
+
  }
 }
-async function sheetStatus(env){const s=await env.DB.prepare('SELECT status,last_attempt,last_success,error_code,active_version,lease_until FROM sheet_sync_state WHERE id=1').first();return {...s,configured:!!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET&&env.GOOGLE_REFRESH_TOKEN&&env.GOOGLE_SHEETS_SPREADSHEET_ID),stale:s?.status==='failed'||!s?.last_success||Date.now()-Date.parse(s.last_success)>1800000,interval_minutes:10}}
-async function sourceMeta(env,state){if(!state.active_version)return null;const r=await env.DB.prepare('SELECT payload FROM sheet_live_producers WHERE version=? AND producer_id=?').bind(state.active_version,SOURCE_META_ID).first();return r?JSON.parse(r.payload):null}
+async function sheetStatus(env){const s=await env.STORE.find('sheet_sync_state',{id:1});return {...s,configured:!!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET&&env.GOOGLE_REFRESH_TOKEN&&env.GOOGLE_SHEETS_SPREADSHEET_ID),stale:s?.status==='failed'||!s?.last_success||Date.now()-Date.parse(s.last_success)>1800000,interval_minutes:10}}
+async function sourceMeta(env,state){if(!state.active_version)return null;const r=await env.STORE.find('sheet_live_producers',{version:state.active_version,producer_id:SOURCE_META_ID});return r?JSON.parse(r.payload):null}
 async function liveProducerList(env){
  const state=await sheetStatus(env),meta=await sourceMeta(env,state);
  if(!meta||meta.policy_version!==2)return json({rows:[],sync:state,policy_version:2,warning:'Queue Sheets sync to replace the old inferred/mixed inventory. Legacy rows are retained but not presented as verified stock.'});
- const rows=(await env.DB.prepare('SELECT payload,fetched_at FROM sheet_live_producers WHERE version=? AND producer_id<>?').bind(state.active_version,SOURCE_META_ID).all()).results.map(x=>({...JSON.parse(x.payload),updated_at:x.fetched_at,source_stale:state.stale,version:state.active_version}));
- return json({rows,sync:state,policy_version:2,source_evidence:meta,version:state.active_version});
+ const rows=(await env.STORE.rows('sheet_live_producers')).filter(r=>r.version===state.active_version&&r.producer_id!==SOURCE_META_ID).map(x=>({...JSON.parse(x.payload),updated_at:x.fetched_at,source_stale:state.stale,version:state.last_success}));
+ return json({rows,sync:state,policy_version:2,source_evidence:meta,version:state.last_success});
 }
 async function liveProducerItems(env,id,request){
- const state=await sheetStatus(env),u=new URL(request?.url||'https://local.invalid/'),version=u.searchParams.get('version')||state.active_version;
+ const state=await sheetStatus(env),u=new URL(request?.url||'https://local.invalid/'),requested=u.searchParams.get('version')||state.last_success,version=state.active_version;
+ if(requested!==state.last_success)return error('Producer snapshot changed; refresh inventory',409);
  if(!version||id===SOURCE_META_ID)return error('Producer snapshot unavailable',404);
- const record=await env.DB.prepare('SELECT payload FROM sheet_live_producers WHERE version=? AND producer_id=?').bind(version,id).first();
+ const record=await env.STORE.find('sheet_live_producers',{version,producer_id:id});
  if(!record||JSON.parse(record.payload).policy_version!==2)return error('Producer snapshot expired; refresh inventory',409);
  const offset=Number(u.searchParams.get('offset')||0),limit=200;if(!Number.isSafeInteger(offset)||offset<0||offset>100000)return error('Invalid offset',400);
- const data=(await env.DB.prepare('SELECT payload FROM sheet_live_items WHERE version=? AND producer_id=? ORDER BY item_id LIMIT ? OFFSET ?').bind(version,id,limit+1,offset).all()).results;
- return json({rows:data.slice(0,limit).map(x=>JSON.parse(x.payload)),next_offset:data.length>limit?offset+limit:null,version});
+ const data=storeSort((await env.STORE.rows('sheet_live_items')).filter(r=>r.version===version&&r.producer_id===id),'item_id').slice(offset,offset+limit+1);
+ const after=await sheetStatus(env);if(after.last_success!==state.last_success)return error('Producer snapshot changed; refresh inventory',409);
+ return json({rows:data.slice(0,limit).map(x=>JSON.parse(x.payload)),next_offset:data.length>limit?offset+limit:null,version:requested});
 }
 async function producerSources(env){
  const state=await sheetStatus(env),meta=await sourceMeta(env,state),routes=meta?.routes??SOURCE_REGISTRY.schedule,assoc=sourceAssociations(routes);
  return json({coverage:SOURCE_REGISTRY.coverage,source_archive:SOURCE_REGISTRY.source_archive,evidence_date:SOURCE_REGISTRY.evidence_date,workflow_sha256:SOURCE_REGISTRY.workflow_sha256,workflow_scope:SOURCE_REGISTRY.scope,workflow_base_url:producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev'),schedule_evidence:meta?(meta.schedule_state==='ok'?'live_sheet':'live_sheet_unavailable'):'handoff_snapshot',references:meta?.references||[],issues:SOURCE_REGISTRY.issues,calls:SOURCE_REGISTRY.calls,schedule:routes.map(r=>({...r,workflow_url:r.workflow_id?producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id):''})),rows:SOURCE_REGISTRY.sources.map(s=>{const evidence=assoc.get(s.source_id)||[];return {...s,accounts:[...new Set(evidence.flatMap(e=>e.accounts))],account_evidence:evidence,measurement:s.kind==='pinterest_rapidapi'?'on_demand_not_finite_stock':'not_connected',remaining:null}})});
 }
+

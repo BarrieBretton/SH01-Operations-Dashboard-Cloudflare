@@ -1,3 +1,4 @@
+import {attachStore} from './test-store-helper.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -10,7 +11,7 @@ const registry=JSON.parse(read('./producer-sources.json'));
 for(const s of registry.sources)if(s.workbook_id_sha256)s.workbook_id_sha256=createHash('sha256').update('book').digest('hex');
 const code='const SOURCE_REGISTRY='+JSON.stringify(registry)+';'+read('./producer-policy.js')+read('./sheets-sync.js');
 export function setup(){
- const sql=new DatabaseSync(':memory:');sql.exec(read('./schema.sql'));sql.exec(read('./sheets-sync-schema.sql'));
+ const sql=new DatabaseSync(':memory:');sql.exec(read('./schema.sql'));sql.exec(read('./sheets-sync-schema.sql'));sql.exec(read('./content-schema.sql')); // Job claims consume persisted sync requests.
  function prepare(q){let args=[];return {bind(...a){args=a;return this},run(){return {meta:{changes:sql.prepare(q).run(...args).changes}}},all(){return {results:sql.prepare(q).all(...args)}},first(){return sql.prepare(q).get(...args)}}}
  const env={DB:{prepare,batch(a){sql.exec('BEGIN');try{let r=a.map(x=>x.run());sql.exec('COMMIT');return r}catch(e){sql.exec('ROLLBACK');throw e}}},GOOGLE_CLIENT_ID:'client',GOOGLE_CLIENT_SECRET:'secret',GOOGLE_REFRESH_TOKEN:'refresh',GOOGLE_SHEETS_SPREADSHEET_ID:'book'};
  const fixtures={
@@ -21,7 +22,7 @@ export function setup(){
  let fail=null;
  const fetch=async u=>{if(fail==='all')return {ok:false,status:403};if(u.includes('oauth2'))return {ok:true,json:async()=>({access_token:'test-access'})};const range=decodeURIComponent(u.split('/values/')[1]||''),name=range.split("'")[1];if(fail===name)return {ok:false,status:403};return {ok:true,json:async()=>({values:fixtures[name]||[['status'],['staged'],['used']]})}};
  const c={crypto:webcrypto,TextEncoder,AbortSignal,URLSearchParams,URL,Date,Map,Set,setTimeout,console,clean:s=>String(s),json:x=>x,error:(m,s)=>({error:m,status:s}),fetch};
- vm.createContext(c);vm.runInContext(code+';globalThis.f={sheetRows,sheetSync,liveProducerList,liveProducerItems,sheetStatus,producerSources,producerReady,producerConsumed,producerStatusValue,producerStockState,producerThreshold,producerURL};',c);
+ attachStore(env,sql,c);vm.createContext(c);vm.runInContext(code+';globalThis.f={sheetRows,sheetSync,liveProducerList,liveProducerItems,sheetStatus,producerSources,producerReady,producerConsumed,producerStatusValue,producerStockState,producerThreshold,producerURL};',c);
  return {env,c,sql,fixtures,fail:x=>{fail=x}};
 }
 test('strict availability: staged + yes only, aliases, whitespace, conflicts and uploaded',()=>{
