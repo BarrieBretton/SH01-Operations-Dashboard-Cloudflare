@@ -122,3 +122,7 @@ The old dashboard D1 may remain for reference. Its binding can be removed from `
 - Existing user authentication, producer eligibility (`staged` and `approved=yes`), non-Sheets unknown inventory, provider permissions and explicit deletion controls are preserved. No live permission/preview/Meta result is implied by local tests.
 
 Official references: [atomic batch updates](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate), [named-range requests](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/request), [Sheets quotas](https://developers.google.com/workspace/sheets/api/limits).
+
+
+## Google Sheets request compatibility fix
+The direct Sheets adapter uses redirect: manual and rejects HTTP 3xx. Cloudflare Workers rejects redirect: error before sending a request; the previous handler mislabeled this store_network_unavailable. Rebuild and deploy before retrying migration. Keep SHEETS_STORAGE_READY=0 until all table hashes match.

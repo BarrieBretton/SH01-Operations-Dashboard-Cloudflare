@@ -22,7 +22,7 @@ export async function directHarness({verify=true}={}){
   const u=new URL(url);
   if(u.hostname==='oauth2.googleapis.com')return Response.json({access_token:'test-private-access-token'});
   if(u.hostname!=='sheets.googleapis.com')throw Error('unexpected network destination');
-  if(options.redirect!=='error')throw Error('redirect policy missing');
+  if(options.redirect!=='manual')throw Error('redirect policy missing');
   if(u.pathname.endsWith(':batchUpdate'))return batch(JSON.parse(options.body));
   if(u.pathname.endsWith('/values:batchGet'))return Response.json({valueRanges:u.searchParams.getAll('ranges').map(getValues)});
   if(u.pathname.includes('/values/'))return Response.json(getValues(decodeURIComponent(u.pathname.split('/values/')[1])));

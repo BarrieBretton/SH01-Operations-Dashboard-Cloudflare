@@ -203,3 +203,7 @@ visual pass and live Meta credential validation were unavailable in this run.
 ## Content, previews and cleanup upgrade
 
 Start with [CONTENT-UPGRADE.md](CONTENT-UPGRADE.md). Apply the additive content-schema.sql migration, deploy the generated Worker, and connect publisher hooks. Existing producer eligibility and source-evidence boundaries remain. New Google writes and provider deletions are disabled by default. The optional FastAPI files and inactive n8n workflows are included but are not automatically installed into other repos/services.
+
+
+## Google Sheets request compatibility fix
+The direct Sheets adapter uses redirect: manual and rejects HTTP 3xx. Cloudflare Workers rejects redirect: error before sending a request; the previous handler mislabeled this store_network_unavailable. Rebuild and deploy before retrying migration. Keep SHEETS_STORAGE_READY=0 until all table hashes match.

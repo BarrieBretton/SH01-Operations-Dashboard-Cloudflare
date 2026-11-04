@@ -72,3 +72,7 @@ Schema lookup, UUID creation and job claim report fixed failure categories only.
 
 ### Job-claim failure detail
 Authenticated Meta sync errors include scrubbed job-claim exception messages only. Runtime string values, the parsed Meta token, URLs and credential-shaped strings are removed. No Meta response bodies are included. This diagnostic does not establish provider access.
+
+
+## Google Sheets request compatibility fix
+The direct Sheets adapter uses redirect: manual and rejects HTTP 3xx. Cloudflare Workers rejects redirect: error before sending a request; the previous handler mislabeled this store_network_unavailable. Rebuild and deploy before retrying migration. Keep SHEETS_STORAGE_READY=0 until all table hashes match.
