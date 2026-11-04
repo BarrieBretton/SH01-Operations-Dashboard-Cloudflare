@@ -11,10 +11,23 @@ async function metaIssue(db,asset,kind,metric,reason){await db.prepare('INSERT I
 function safeMetricValues(raw){let values=[];for(let v of raw?.values||[])if(typeof v.value==='number'&&Number.isFinite(v.value))values.push({at:v.end_time||null,value:v.value});return values}
 async function metricProbe(db,id,kind,metric,token,params={}){try{let data=await graph(id+'/insights',token,{metric,...params});let series=(data.data||[]).filter(x=>x.name===metric).flatMap(x=>safeMetricValues(x));await db.prepare('INSERT INTO meta_capabilities(asset_id,kind,metric,status,reason,checked_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(asset_id,kind,metric) DO UPDATE SET status=excluded.status,reason=excluded.reason,checked_at=CURRENT_TIMESTAMP').bind(id,kind,metric,'available','').run();for(let item of series){let at=item.at||new Date().toISOString();await db.prepare('INSERT INTO meta_snapshots(asset_id,kind,metric,observed_at,value,source_period) VALUES(?,?,?,?,?,?) ON CONFLICT(asset_id,kind,metric,observed_at) DO UPDATE SET value=excluded.value').bind(id,kind,metric,at,item.value,params.period||'lifetime').run()}return series.length}catch(e){await metaIssue(db,id,kind,metric,e.message);return 0}}
 // Each run records one small page for one asset; successive runs advance history.
+
+async function metaSetupStep(stage,fn){
+ try{return await fn()}catch(e){
+  const m=String(e?.message||'');
+  const kind=e instanceof ReferenceError?'reference_error':
+   e instanceof TypeError?'type_error':
+   /no such table/i.test(m)?'missing_table':
+   /no such column/i.test(m)?'missing_column':
+   /not authorized|SQLITE_AUTH/i.test(m)?'database_authorization':
+   /bind/i.test(m)?'binding_error':'other_error';
+  throw Error('meta_setup_'+stage+'_'+kind);
+ }
+}
 async function metaSync(env){
- if(!await contentReady(env))throw Error('content_schema_missing');
- const db=env.DB,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=crypto.randomUUID();
- const lock=await db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run();
+ if(!await metaSetupStep('schema',()=>contentReady(env)))throw Error('content_schema_missing');
+ const db=env.DB,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=await metaSetupStep('uuid',()=>crypto.randomUUID());
+ const lock=await metaSetupStep('job_claim',()=>db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run());
  if(!lock.meta.changes)return {status:'already_running'};
  try{
   let state=await db.prepare("SELECT payload FROM content_collect_state WHERE id='meta'").first();state=state?JSON.parse(state.payload):{};
@@ -70,5 +83,5 @@ async function metaApi(req,env){let p=new URL(req.url).pathname;if(p==='/api/met
 'invalid_graph_version':'invalid_graph_version',
 'network_unavailable':'meta_network_unavailable',
 'rate_limited_or_unavailable':'meta_rate_limited_or_unavailable'
-}[e.message] || 'meta_sync_failed_check_job_status')},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
+}[e.message] || (/^meta_setup_[a-z_]+$/.test(String(e.message))?e.message:'meta_sync_failed_check_job_status'))},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
 

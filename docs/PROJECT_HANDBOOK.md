@@ -60,3 +60,7 @@ replacements. A failed validation changes neither selected repository.
 
 ## Meta sync setup diagnostics
 The sync endpoint exposes only allowlisted error categories. Credential parsing precedes the job-start record, so status=never does not prove that no request reached the Worker. Unknown errors remain generic; credential values and raw exceptions are withheld.
+
+
+### Meta setup-stage diagnostics
+Schema lookup, UUID creation and job claim report fixed failure categories only. Raw exceptions, SQL and credentials remain withheld.
