@@ -77,7 +77,16 @@ async function metaSync(env){
   await db.prepare("UPDATE content_jobs SET status=?,last_success=?,error_code=NULL,lease=NULL,lease_until=NULL WHERE id='meta_collect' AND lease=?").bind(stats.status,contentNow(),lease).run();return stats;
  }catch(e){const reason=/^Graph error [0-9]+$/.test(e.message)||/^[a-z_]+$/.test(e.message)?e.message:'meta_collection_failed';await db.prepare("UPDATE content_jobs SET status='failed',error_code=?,lease=NULL,lease_until=NULL WHERE id='meta_collect' AND lease=?").bind(reason,lease).run();throw Error(reason);}
 }
-async function metaApi(req,env){let p=new URL(req.url).pathname;if(p==='/api/meta/sync'&&req.method==='POST'){if(!env.META_SYSVAR)return json({error:'META_SYSVAR missing'},503);try{return json({ok:true,result:await metaSync(env)})}catch(e){return json({error:e.message==='META_SYSVAR missing'?e.message:'Meta sync failed; see capability inventory'},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
+async function metaApi(req,env){let p=new URL(req.url).pathname;if(p==='/api/meta/sync'&&req.method==='POST'){if(!env.META_SYSVAR)return json({error:'META_SYSVAR missing'},503);try{return json({ok:true,result:await metaSync(env)})}catch(e){return json({error:({
+'META_SYSVAR missing':'meta_credential_missing',
+'META_SYSVAR structure invalid':'meta_credential_invalid_json',
+'META_SYSVAR has no supported access token field':'meta_credential_token_field_missing',
+'META_SYSVAR credential format unsupported':'meta_credential_format_unsupported',
+'content_schema_missing':'content_schema_missing',
+'invalid_graph_version':'invalid_graph_version',
+'network_unavailable':'meta_network_unavailable',
+'rate_limited_or_unavailable':'meta_rate_limited_or_unavailable'
+}[e.message] || 'meta_sync_failed_check_job_status')},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
 
 
 // BEGIN CONTENT BACKEND

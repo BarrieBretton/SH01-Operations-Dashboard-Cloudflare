@@ -112,3 +112,7 @@ Native image/video elements are used for permitted API-returned media URLs; arbi
 ### Local test result for this package
 
 80 automated tests passed: 40 Node tests and 40 Python tests (27 inventory/deletion, 10 workflow instrumentation, 3 existing importer). The patch was also checked against the exact baseline, applied, reapplied idempotently, and verified to reject an unrelated local Worker edit. Generated Worker rebuild is idempotent. These are local/mocked/synthetic checks; live validation boundaries above still apply.
+
+
+## Meta sync setup diagnostics
+The sync endpoint exposes only allowlisted error categories. Credential parsing precedes the job-start record, so status=never does not prove that no request reached the Worker. Unknown errors remain generic; credential values and raw exceptions are withheld.

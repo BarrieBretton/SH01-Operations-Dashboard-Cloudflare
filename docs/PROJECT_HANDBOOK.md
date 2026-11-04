@@ -56,3 +56,7 @@ Update these registers with non-secret commit/version/runtime evidence.
 Installer correction: app.py wiring now uses a validated syntax-tree location,
 preserving unrelated local edits. Full-file hashing still protects other code
 replacements. A failed validation changes neither selected repository.
+
+
+## Meta sync setup diagnostics
+The sync endpoint exposes only allowlisted error categories. Credential parsing precedes the job-start record, so status=never does not prove that no request reached the Worker. Unknown errors remain generic; credential values and raw exceptions are withheld.
