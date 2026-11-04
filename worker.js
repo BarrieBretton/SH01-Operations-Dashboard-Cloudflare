@@ -14,6 +14,27 @@ async function ingestEvent(req,env){const b=await body(req);const events=Array.i
 async function ingestProducer(req,env){const x=await body(req);if(!x||!x.producer_id||!x.name||!Array.isArray(x.items)||x.items.length>350)return error('Invalid producer batch; maximum 350 items',400);const id=clean(x.producer_id,180),threshold=Math.max(0,Math.min(100000,Number(x.threshold)||0)),workflows=JSON.stringify((x.workflow_names||[]).filter(v=>typeof v==='string').slice(0,100).map(v=>clean(v,120)));const statements=[env.DB.prepare(`INSERT INTO producers(producer_id,name,account,creator_handle,threshold,sheet_backed,workflow_names,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(producer_id) DO UPDATE SET name=excluded.name,account=excluded.account,creator_handle=excluded.creator_handle,threshold=excluded.threshold,sheet_backed=excluded.sheet_backed,workflow_names=excluded.workflow_names,updated_at=CURRENT_TIMESTAMP`).bind(id,clean(x.name,150),clean(x.account,150),clean(x.creator_handle,150),threshold,x.sheet_backed?1:0,workflows)];if(x.reset)statements.push(env.DB.prepare('DELETE FROM producer_items WHERE producer_id=?').bind(id));for(const item of x.items){if(!item.item_id)return error('Missing item ID',400);statements.push(env.DB.prepare(`INSERT INTO producer_items(producer_id,item_id,item_label,item_url,status,approved,ready,origin) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(producer_id,item_id) DO UPDATE SET item_label=excluded.item_label,item_url=excluded.item_url,status=excluded.status,approved=excluded.approved,ready=excluded.ready,origin=excluded.origin`).bind(id,clean(item.item_id,150),clean(item.item_label,150),producerURL(item.item_url),clean(producerStatusValue(item).value,60),clean(item.approved,60),producerReady(item)?1:0,clean(item.origin,100)))}await env.DB.batch(statements);return json({ok:true,items:x.items.length})}
 async function listFailures(req,env){const u=new URL(req.url),q=(u.searchParams.get('q')||'').trim().split(/\s+/).filter(Boolean).slice(0,5),where=[],args=[];let source=u.searchParams.get('source');if(source){if(!['n8n','sh01'].includes(source))return error('Invalid source',400);where.push('source=?');args.push(source)}for(const [k,op] of [['from','>='],['to','<']]){let v=u.searchParams.get(k);if(v){if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return error('Invalid date',400);const d=k==='to'?new Date(Date.parse(v+'T00:00:00Z')+86400000).toISOString():v+'T00:00:00.000Z';where.push(`happened_at ${op} ?`);args.push(d)}}for(let term of q){where.push(`(lower(workflow_name) LIKE ? ESCAPE '\\' OR lower(message) LIKE ? ESCAPE '\\' OR lower(service) LIKE ? ESCAPE '\\')`);args.push(like(term),like(term),like(term))}const limit=Math.min(100,Math.max(1,Number(u.searchParams.get('limit'))||100)),offset=Math.min(100000,Math.max(0,Number(u.searchParams.get('offset'))||0));const sql='SELECT source,event_id,happened_at,workflow_name,workflow_url,severity,message,service FROM failures'+(where.length?' WHERE '+where.join(' AND '):'')+' ORDER BY happened_at DESC LIMIT ? OFFSET ?';const {results}=await env.DB.prepare(sql).bind(...args,limit,offset).all();return json({rows:results})}
 
+
+async function metaClaimDiagnostic(env,token,fn){
+ try{return await fn()}catch(e){
+  let detail=[e?.message,e?.cause?.message]
+    .filter(x=>typeof x==='string').join(' | ');
+  const secrets=[token,...Object.values(env)
+    .filter(x=>typeof x==='string'&&x.length>0)];
+  const variants=[...new Set(secrets.flatMap(x=>[
+    x,encodeURIComponent(x),JSON.stringify(x).slice(1,-1)
+  ]))].filter(Boolean).sort((a,b)=>b.length-a.length);
+  for(const value of variants)detail=detail.split(value).join('[REDACTED]');
+  detail=detail
+    .replace(/https?:\/\/\S+/gi,'[URL OMITTED]')
+    .replace(/Bearer\s+\S+/gi,'Bearer [REDACTED]')
+    .replace(/eyJ[A-Za-z0-9_.-]+/g,'[TOKEN OMITTED]')
+    .replace(/[A-Za-z0-9_+/=-]{40,}/g,'[LONG VALUE OMITTED]')
+    .replace(/[\r\n\t]+/g,' ')
+    .slice(0,700);
+  throw Error('meta_job_claim_detail: '+(detail||'no_message'));
+ }
+}
 // Meta analytics extension for the dashboard. Bundled into worker.js by build_single_worker.py.
 // META_SYSVAR may be a token or JSON containing access_token/token. Never persist either.
 const META_VERSION='v24.0';
@@ -43,7 +64,7 @@ async function metaSetupStep(stage,fn){
 async function metaSync(env){
  if(!await metaSetupStep('schema',()=>contentReady(env)))throw Error('content_schema_missing');
  const db=env.DB,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=await metaSetupStep('uuid',()=>crypto.randomUUID());
- const lock=await metaSetupStep('job_claim',()=>db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run());
+ const lock=await metaClaimDiagnostic(env,token,()=>db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run());
  if(!lock.meta.changes)return {status:'already_running'};
  try{
   let state=await db.prepare("SELECT payload FROM content_collect_state WHERE id='meta'").first();state=state?JSON.parse(state.payload):{};
@@ -99,7 +120,7 @@ async function metaApi(req,env){let p=new URL(req.url).pathname;if(p==='/api/met
 'invalid_graph_version':'invalid_graph_version',
 'network_unavailable':'meta_network_unavailable',
 'rate_limited_or_unavailable':'meta_rate_limited_or_unavailable'
-}[e.message] || (/^meta_setup_[a-z_]+$/.test(String(e.message))?e.message:'meta_sync_failed_check_job_status'))},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
+}[e.message] || (/^meta_setup_[a-z_]+$/.test(String(e.message))?e.message:(String(e?.message||'').startsWith('meta_job_claim_detail:')?e.message:'meta_sync_failed_check_job_status')))},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
 
 
 // BEGIN CONTENT BACKEND

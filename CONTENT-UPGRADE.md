@@ -120,3 +120,7 @@ The sync endpoint exposes only allowlisted error categories. Credential parsing 
 
 ### Meta setup-stage diagnostics
 Schema lookup, UUID creation and job claim report fixed failure categories only. Raw exceptions, SQL and credentials remain withheld.
+
+
+### Job-claim failure detail
+Authenticated Meta sync errors include scrubbed job-claim exception messages only. Runtime string values, the parsed Meta token, URLs and credential-shaped strings are removed. No Meta response bodies are included. This diagnostic does not establish provider access.

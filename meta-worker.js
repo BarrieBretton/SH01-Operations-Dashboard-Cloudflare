@@ -1,3 +1,24 @@
+
+async function metaClaimDiagnostic(env,token,fn){
+ try{return await fn()}catch(e){
+  let detail=[e?.message,e?.cause?.message]
+    .filter(x=>typeof x==='string').join(' | ');
+  const secrets=[token,...Object.values(env)
+    .filter(x=>typeof x==='string'&&x.length>0)];
+  const variants=[...new Set(secrets.flatMap(x=>[
+    x,encodeURIComponent(x),JSON.stringify(x).slice(1,-1)
+  ]))].filter(Boolean).sort((a,b)=>b.length-a.length);
+  for(const value of variants)detail=detail.split(value).join('[REDACTED]');
+  detail=detail
+    .replace(/https?:\/\/\S+/gi,'[URL OMITTED]')
+    .replace(/Bearer\s+\S+/gi,'Bearer [REDACTED]')
+    .replace(/eyJ[A-Za-z0-9_.-]+/g,'[TOKEN OMITTED]')
+    .replace(/[A-Za-z0-9_+/=-]{40,}/g,'[LONG VALUE OMITTED]')
+    .replace(/[\r\n\t]+/g,' ')
+    .slice(0,700);
+  throw Error('meta_job_claim_detail: '+(detail||'no_message'));
+ }
+}
 // Meta analytics extension for the dashboard. Bundled into worker.js by build_single_worker.py.
 // META_SYSVAR may be a token or JSON containing access_token/token. Never persist either.
 const META_VERSION='v24.0';
@@ -27,7 +48,7 @@ async function metaSetupStep(stage,fn){
 async function metaSync(env){
  if(!await metaSetupStep('schema',()=>contentReady(env)))throw Error('content_schema_missing');
  const db=env.DB,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=await metaSetupStep('uuid',()=>crypto.randomUUID());
- const lock=await metaSetupStep('job_claim',()=>db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run());
+ const lock=await metaClaimDiagnostic(env,token,()=>db.prepare("UPDATE content_jobs SET lease=?,lease_until=?,status='running',last_attempt=?,error_code=NULL WHERE id='meta_collect' AND (lease_until IS NULL OR lease_until<?)").bind(lease,Date.now()+240000,contentNow(),Date.now()).run());
  if(!lock.meta.changes)return {status:'already_running'};
  try{
   let state=await db.prepare("SELECT payload FROM content_collect_state WHERE id='meta'").first();state=state?JSON.parse(state.payload):{};
@@ -83,5 +104,5 @@ async function metaApi(req,env){let p=new URL(req.url).pathname;if(p==='/api/met
 'invalid_graph_version':'invalid_graph_version',
 'network_unavailable':'meta_network_unavailable',
 'rate_limited_or_unavailable':'meta_rate_limited_or_unavailable'
-}[e.message] || (/^meta_setup_[a-z_]+$/.test(String(e.message))?e.message:'meta_sync_failed_check_job_status'))},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
+}[e.message] || (/^meta_setup_[a-z_]+$/.test(String(e.message))?e.message:(String(e?.message||'').startsWith('meta_job_claim_detail:')?e.message:'meta_sync_failed_check_job_status')))},503)}}if(req.method!=='GET')return error('Not found',404);let sql=p==='/api/meta/assets'?'SELECT * FROM meta_assets ORDER BY platform,name':p==='/api/meta/content'?'SELECT * FROM meta_content ORDER BY published_at DESC LIMIT 1000':p==='/api/meta/capabilities'?'SELECT * FROM meta_capabilities ORDER BY asset_id,kind,metric':null;if(sql)return json({rows:(await env.DB.prepare(sql).all()).results});if(p==='/api/meta/series'){let u=new URL(req.url),id=u.searchParams.get('id'),metric=u.searchParams.get('metric');if(!/^\d{5,30}$/.test(id||'')||!/^[a-z_]{2,70}$/.test(metric||''))return error('Invalid selection',400);return json({rows:(await env.DB.prepare('SELECT observed_at,value,source_period FROM meta_snapshots WHERE asset_id=? AND metric=? ORDER BY observed_at LIMIT 5000').bind(id,metric).all()).results})}return error('Not found',404)}
 
