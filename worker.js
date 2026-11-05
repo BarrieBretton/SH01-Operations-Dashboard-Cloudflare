@@ -13,8 +13,20 @@ function storeConfigured(env){return ['GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET',
 function storeHeaders(){return ['record_key',...Array.from({length:STORE_PARTS},(_,i)=>'json_'+(i+1))];}
 function storeCells(values){return {values:values.map(v=>({userEnteredValue:{stringValue:String(v)}}))};}
 function storePack(key,row){const s=JSON.stringify(row),parts=[];let at=0;while(at<s.length){let end=Math.min(at+STORE_CHUNK,s.length);if(end<s.length&&s.charCodeAt(end-1)>=0xD800&&s.charCodeAt(end-1)<=0xDBFF)end--;parts.push(s.slice(at,end));at=end;}if(parts.length>STORE_PARTS)throw Error('store_record_too_large');while(parts.length<STORE_PARTS)parts.push('');return [key,...parts];}
-async function storeToken(env){if(!storeConfigured(env))throw Error('sheets_storage_not_configured');if(!storeTokens.has(env))storeTokens.set(env,sheetToken(env).catch(()=>{storeTokens.delete(env);throw Error('store_google_oauth_failed')}));return storeTokens.get(env);}
-async function storeGoogle(env,suffix,payload){
+async function storeToken(env){
+ if(!storeConfigured(env))throw Error('sheets_storage_not_configured');
+ let entry=storeTokens.get(env);
+ if(!entry||Date.now()>=entry.expires){
+  entry={expires:Date.now()+300000,promise:null};
+  entry.promise=sheetToken(env).catch(()=>{
+   if(storeTokens.get(env)===entry)storeTokens.delete(env);
+   throw Error('store_google_oauth_failed');
+  });
+  storeTokens.set(env,entry);
+ }
+ return entry.promise;
+}
+async function storeGoogle(env,suffix,payload,authRetried=false){
  const token=await storeToken(env),u='https://sheets.googleapis.com/v4/spreadsheets/'+encodeURIComponent(env.GOOGLE_SHEETS_SPREADSHEET_ID)+suffix;
  // Mutations are NOT blindly retried here. Their guard/idempotency state is reconciled first.
  const tries=payload===undefined?3:1;
@@ -27,6 +39,12 @@ async function storeGoogle(env,suffix,payload){
    throw Error('store_network_unavailable');
   }
   if(r.status>=300&&r.status<400)throw Error('store_redirect_rejected');
+  if(r.status===401&&!authRetried){
+   await r.body?.cancel();
+   const cached=storeTokens.get(env);
+   if(cached&&(await cached.promise)===token)storeTokens.delete(env);
+   return storeGoogle(env,suffix,payload,true);
+  }
   if(!r.ok){let scopeMissing=false;if(r.status===403){try{const b=await r.json();scopeMissing=b?.error?.details?.some(d=>d.reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT')||b?.error?.errors?.some(d=>d.reason==='insufficientPermissions');}catch{}}const code=scopeMissing?'store_google_scope_missing':r.status===401?'store_google_oauth_rejected':r.status===403?'store_google_permission_denied':r.status===404?'store_workbook_not_found':r.status===429?'store_rate_limited':r.status===400?'store_google_invalid_request':'store_google_unavailable';if(i+1<tries&&(r.status===429||r.status>=500)){await new Promise(ok=>setTimeout(ok,500*2**i));continue;}throw Error(code);}
   try{return await r.json()}catch{throw Error('store_response_not_json')}
  }

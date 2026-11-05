@@ -94,3 +94,11 @@ categories: subrequest_limit, request_timeout, or fetch_exception; no raw
 exceptions, URLs, credentials or row values. Local storage tests passed,
 including a 9,037-row snapshot requiring three reads. Live recovery must be
 confirmed by an advancing last_success and status=ok.
+
+
+## Google access-token cache repair
+Storage access tokens now have a five-minute cache lifetime. A Google HTTP
+401 invalidates the rejected cached token and retries once with refreshed
+authentication. Repeated rejection remains an error. No credentials or raw
+provider errors are logged. Local storage tests passed, including expiry
+and bounded authentication retry; live recovery requires verification.
