@@ -76,3 +76,11 @@ Authenticated Meta sync errors include scrubbed job-claim exception messages onl
 
 ## Google Sheets request compatibility fix
 The direct Sheets adapter uses redirect: manual and rejects HTTP 3xx. Cloudflare Workers rejects redirect: error before sending a request; the previous handler mislabeled this store_network_unavailable. Rebuild and deploy before retrying migration. Keep SHEETS_STORAGE_READY=0 until all table hashes match.
+
+
+## Sheets collector failure diagnostics
+Collector errors are logged before the failure-state storage write and at
+the scheduler boundary. Only fixed error categories are emitted; raw
+exceptions, credentials and worksheet values are excluded. Worker outcome
+`ok` does not establish collector success. Confirm an advancing last_success
+and status=ok. This diagnostic change does not repair collection failures.

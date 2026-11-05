@@ -105,7 +105,7 @@ async function sheetSync(env){
   });
   return {status:'ok',producers:groups.size,fetched_at:fetched};
  }catch(e){
-  const code=safeSheetError(e);await db.finish('sheet_sync_state',1,lease,{status:'failed',error_code:code});return {status:'failed',error_code:code};
+  collectorDiagnostic('sheets_before_failure_save',e);const code=safeSheetError(e);await db.finish('sheet_sync_state',1,lease,{status:'failed',error_code:code});return {status:'failed',error_code:code};
 
  }
 }
