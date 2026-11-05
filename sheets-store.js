@@ -17,7 +17,13 @@ async function storeGoogle(env,suffix,payload){
  // Mutations are NOT blindly retried here. Their guard/idempotency state is reconciled first.
  const tries=payload===undefined?3:1;
  for(let i=0;i<tries;i++){
-  let r;try{r=await fetch(u,{method:payload===undefined?'GET':'POST',redirect:'manual',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)}),signal:AbortSignal.timeout(20000)});}catch{if(i+1<tries)continue;throw Error('store_network_unavailable');}
+  let r;try{r=await fetch(u,{method:payload===undefined?'GET':'POST',redirect:'manual',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)}),signal:AbortSignal.timeout(20000)});}catch(e){
+   const kind=/too many subrequests/i.test(String(e?.message||''))?'subrequest_limit':
+    ['TimeoutError','AbortError'].includes(e?.name)?'request_timeout':'fetch_exception';
+   console.log(JSON.stringify({event:'store_transport_failure',kind,attempt:i+1}));
+   if(kind!=='subrequest_limit'&&i+1<tries)continue;
+   throw Error('store_network_unavailable');
+  }
   if(r.status>=300&&r.status<400)throw Error('store_redirect_rejected');
   if(!r.ok){let scopeMissing=false;if(r.status===403){try{const b=await r.json();scopeMissing=b?.error?.details?.some(d=>d.reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT')||b?.error?.errors?.some(d=>d.reason==='insufficientPermissions');}catch{}}const code=scopeMissing?'store_google_scope_missing':r.status===401?'store_google_oauth_rejected':r.status===403?'store_google_permission_denied':r.status===404?'store_workbook_not_found':r.status===429?'store_rate_limited':r.status===400?'store_google_invalid_request':'store_google_unavailable';if(i+1<tries&&(r.status===429||r.status>=500)){await new Promise(ok=>setTimeout(ok,500*2**i));continue;}throw Error(code);}
   try{return await r.json()}catch{throw Error('store_response_not_json')}
@@ -122,14 +128,9 @@ class SheetStore{
  constructor(env){this.env=env;}
  async snapshot(tables){
   tables=[...new Set(tables)];
-  for(let attempt=0;attempt<4;attempt++){
-   let revision=null,remaining=[...tables],offsets={},data=Object.fromEntries(tables.map(t=>[t,[]])),restart=false;
-   while(remaining.length){const res=await storeRPC(this.env,{op:'read',tables:remaining,offsets});if(revision!==null&&revision!==res.revision){restart=true;break;}revision=res.revision;
-    for(const t of remaining){data[t].push(...res.tables[t].rows);offsets[t]=res.tables[t].next;}
-    remaining=remaining.filter(t=>offsets[t]!==null);
-   }
-   if(!restart)return {revision,tables:data};
-  }throw Error('store_read_conflict_retry');
+  const snap=await storeReadBundle(this.env,tables);
+  return {revision:snap.control.revision,tables:Object.fromEntries(tables.map(t=>
+   [t,[...snap.tables[t].rows.values()].map(entry=>entry.row)]))};
  }
  async rows(table){return (await this.snapshot([table])).tables[table];}
  async find(table,where){return (await this.rows(table)).find(r=>storeMatch(r,where))||null;}

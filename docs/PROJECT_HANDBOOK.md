@@ -84,3 +84,13 @@ the scheduler boundary. Only fixed error categories are emitted; raw
 exceptions, credentials and worksheet values are excluded. Worker outcome
 `ok` does not establish collector success. Confirm an advancing last_success
 and status=ok. This diagnostic change does not repair collection failures.
+
+
+## Direct Sheets internal snapshot read fix
+Internal snapshots read one revision-checked bundle instead of repeatedly
+reading entire tables for each 1,000-row transport page. External pagination
+and atomic commit guards remain unchanged. Transport logs expose only fixed
+categories: subrequest_limit, request_timeout, or fetch_exception; no raw
+exceptions, URLs, credentials or row values. Local storage tests passed,
+including a 9,037-row snapshot requiring three reads. Live recovery must be
+confirmed by an advancing last_success and status=ok.
