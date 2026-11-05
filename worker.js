@@ -580,7 +580,7 @@ async function metaSync(env){
   const edge=asset.platform==='instagram'?(phase==='stories'?'stories':'media'):'published_posts';
   const fields=asset.platform==='instagram'?'id,media_type,media_product_type,timestamp,caption,permalink,thumbnail_url,media_url,like_count,comments_count':'id,created_time,message,permalink_url,full_picture';
   const cursor=phase==='history'?st.after:phase==='stories'?st.story_after:st.recent_after;
-  const page=await graph(asset.id+'/'+edge,asset.token,{fields,limit:2,...(cursor?{after:cursor}:{})},version);stats.more_available=!!page.paging?.next;
+  const page=await graph(asset.id+'/'+edge,asset.token,{fields,limit:2,...(cursor?{after:cursor}:{})},version);if(!Array.isArray(page?.data))throw Error('media_response_data_missing');stats.more_available=!!page.paging?.next;
   if(page.paging?.next&&!page.paging?.cursors?.after)throw Error('media_cursor_missing');
   const posts=[];
   for(const item of page.data||[]){
@@ -608,6 +608,15 @@ async function metaSync(env){
   if(state.asset_index>=assets.length){state.asset_index=0;state.pages_after=discovered.paging?.next?discovered.paging?.cursors?.after:null;}
   stats.history_complete=!!st.history_complete;stats.status=stats.metric_failures?'partial':'ok';
   const records=posts.map(postRecord),at=contentNow();
+  const result={
+   asset_id:asset.id,platform:asset.platform,phase,checked_at:at,
+   media_fetched:mediaRows.length,posts_registered:records.length,
+   missing_permalink:mediaRows.filter(r=>!r.permalink).length,
+   rejected_permalink:capabilityRows.filter(r=>r.metric==='registry_permalink').length,
+   metric_failures:stats.metric_failures,more_available:stats.more_available,
+   outcome:!mediaRows.length?'empty_response':records.length?'collected':'no_registerable_posts'
+  };
+  st.last_result=result;state.last_result=result;
   await db.transact(['content_jobs','content_collect_state','meta_assets','meta_content','meta_snapshots','meta_capabilities','content_posts','content_observations','content_sheet_outbox'],tx=>{
    const job=tx.find('content_jobs',{id:'meta_collect'});if(job.lease!==lease||job.lease_until<Date.now())throw Error('store_job_lease_lost');
    for(const row of assetRows)tx.put('meta_assets',row);
@@ -616,7 +625,7 @@ async function metaSync(env){
    mergePostRecords(tx,records,at);
    tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});
    Object.assign(job,{status:stats.status,last_success:at,error_code:null,lease:null,lease_until:null});
-  });return stats;
+  });console.log(JSON.stringify({event:'meta_collection_result',...result}));return stats;
  }catch(e){const reason=/^Graph error [0-9]+$/.test(e.message)||/^[a-z_]+$/.test(e.message)?e.message:'meta_collection_failed';await db.finish('content_jobs','meta_collect',lease,{status:'failed',error_code:reason});throw Error(reason);}
 }
 async function metaApi(req,env){

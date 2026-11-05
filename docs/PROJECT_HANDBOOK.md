@@ -102,3 +102,13 @@ Storage access tokens now have a five-minute cache lifetime. A Google HTTP
 authentication. Repeated rejection remains an error. No credentials or raw
 provider errors are logged. Local storage tests passed, including expiry
 and bounded authentication retry; live recovery requires verification.
+
+
+## Meta per-account collection results
+Media responses must contain a data array. Each committed collection saves
+last_result in the Meta state and selected asset state, and emits
+meta_collection_result with account ID, phase, counts and outcome.
+Empty responses are distinguished from registered posts. last_success still
+means collector completion, not proof that posts were found.
+Tokens, cursors, captions, URLs and raw provider responses are not logged.
+Local collector tests passed; live recovery remains to be verified.
