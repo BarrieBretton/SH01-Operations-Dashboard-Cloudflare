@@ -59,3 +59,19 @@ test('bridge auth grants exact methods only; deletion and arbitrary bridge paths
  for(const [p,m] of [['/api/ingest/scanner/posts','POST'],['/api/ingest/scanner/unknown','GET'],['/api/ingest/deletion-result','POST'],['/api/storage/setup','POST']])assert.equal((await call(p,m)).status,401);
  assert.equal((await call('/api/ingest/scanner/health','GET','wrong')).status,401);
 });
+test('scanner snapshots coalesce reads, isolate credentials, expire and invalidate on writes',async()=>{
+ const h=harness([post(1,{preview_url:'https://a.cdninstagram.com/a.jpg',preview_type:'image'})]);
+ let reads=0;h.env.STORE.snapshot=async()=>{reads++;return {tables:structuredClone(h.tables)};};
+ await Promise.all([h.c.scannerAccounts(h.env),h.c.scannerPosts(h.env,new URL('https://dash/?platform=instagram&account_id=1'))]);
+ await h.c.scannerMedia(h.env,new URL('https://dash/?platform=instagram&account_id=1&post_id=001'));
+ assert.equal(reads,1);
+ h.env.GOOGLE_REFRESH_TOKEN='other';await h.c.scannerAccounts(h.env);assert.equal(reads,2);
+ await h.c.scannerFingerprints(h.env,[{platform:'instagram',account_id:'1',post_id:'001',fingerprint:{algorithm:'sh01-social-perceptual',version:1,media_type:'IMAGE'}}]);
+ await h.c.scannerAccounts(h.env);assert.equal(reads,3);
+ const realDate=h.c.Date;h.c.Date={now:()=>realDate.now()+11000};await h.c.scannerAccounts(h.env);assert.equal(reads,4);
+});
+test('failed snapshots are evicted and retried on next request',async()=>{
+ const h=harness();let reads=0;h.env.STORE.snapshot=async()=>{if(++reads===1)throw Error('store_rate_limited');return {tables:h.tables};};
+ await assert.rejects(h.c.scannerAccounts(h.env),/store_rate_limited/);
+ await h.c.scannerAccounts(h.env);assert.equal(reads,2);
+});
