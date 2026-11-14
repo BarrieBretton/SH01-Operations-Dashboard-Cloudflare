@@ -42,7 +42,7 @@ export default {
  async scheduled(event,raw,ctx){ctx.waitUntil(runStoredJobs(raw).catch(()=>console.log('scheduled_storage_unavailable')));},
  async fetch(req,raw,ctx){const u=new URL(req.url),p=u.pathname;
  if(p==='/'&&req.method==='GET')return new Response(HTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https://*.cdninstagram.com https://*.fbcdn.net https://*.tumblr.com; media-src https://*.cdninstagram.com https://*.fbcdn.net https://*.tumblr.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
- if(!p.startsWith('/api/'))return error('Not found',404);const ingest=p.startsWith('/api/ingest/'),given=ingest?req.headers.get('X-INGEST-KEY'):(req.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');if(!await authorized(given,ingest?raw.INGEST_TOKEN:raw.DASHBOARD_TOKEN))return error('Unauthorized',401);
+ if(!p.startsWith('/api/'))return error('Not found',404);const ingest=p.startsWith('/api/ingest/'),given=ingest?req.headers.get('X-INGEST-KEY'):(req.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');const scannerRoute=(req.method==='GET'&&p==='/api/ingest/fingerprints')||(req.method==='POST'&&['/api/ingest/posts','/api/ingest/duplicate-groups'].includes(p));if(!await authorized(given,ingest?raw.INGEST_TOKEN:raw.DASHBOARD_TOKEN)&&!(scannerRoute&&await authorized(given,raw.MEDIA_CLIP_API_KEY)))return error('Unauthorized',401);
  try{
   if(p==='/api/storage/d1-export'&&req.method==='GET')return await exportLegacyD1(req,raw);
   if(p==='/api/storage/setup'&&req.method==='POST'){await storeSetup(raw);return json(await storeVerifyGuard(raw));}
@@ -70,4 +70,3 @@ export default {
  }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed';return json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);}
  }
 };
-
