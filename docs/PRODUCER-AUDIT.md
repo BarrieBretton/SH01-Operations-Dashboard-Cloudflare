@@ -1,3 +1,5 @@
+> **Current instructions (5 November 2026):** [Implementation and acceptance](IMPLEMENTATION-ACCEPTANCE.md). The historical setup and deployment observations below apply to their original revision. For this upgrade, retain the existing verified Sheets cutover, use the single minute cron, and follow the current guide for Meta pacing, companion integration and live checks.
+
 <!-- SH01 DIRECT SHEETS FOLLOW-UP BEGIN -->
 > **Current storage instructions:** the existing Cloudflare Worker calls the Google Sheets API directly using its existing Google OAuth credentials. No Apps Script project, gateway URL or gateway secret is required. Follow [../SHEETS-MIGRATION.md](../SHEETS-MIGRATION.md): deploy with `SHEETS_STORAGE_READY=0`, verify the live write guard and all-table copy, then set `SHEETS_STORAGE_READY=1`. Cloud deployment and cutover remain pending until verified. Existing optional business-sheet write flags and platform credentials remain in their current scopes. Older storage/deployment instructions below are historical where they differ from this guide.
 <!-- SH01 DIRECT SHEETS FOLLOW-UP END -->
@@ -102,3 +104,4 @@ Review/commit the metadata registry and Worker together. `audit_sources.py` neve
 - Drive search and listing/pagination: https://developers.google.com/workspace/drive/api/guides/search-files and https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list
 
 The account/source conclusions above come from this project's exported graph and schedule, not from generic API documentation.
+

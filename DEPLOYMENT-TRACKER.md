@@ -1,3 +1,5 @@
+> **Current instructions (5 November 2026):** [Implementation and acceptance](docs/IMPLEMENTATION-ACCEPTANCE.md). The historical setup and deployment observations below apply to their original revision. For this upgrade, retain the existing verified Sheets cutover, use the single minute cron, and follow the current guide for Meta pacing, companion integration and live checks.
+
 <!-- SH01 DIRECT SHEETS FOLLOW-UP BEGIN -->
 > **Current storage instructions:** the existing Cloudflare Worker calls the Google Sheets API directly using its existing Google OAuth credentials. No Apps Script project, gateway URL or gateway secret is required. Follow [SHEETS-MIGRATION.md](SHEETS-MIGRATION.md): deploy with `SHEETS_STORAGE_READY=0`, verify the live write guard and all-table copy, then set `SHEETS_STORAGE_READY=1`. Cloud deployment and cutover remain pending until verified. Existing optional business-sheet write flags and platform credentials remain in their current scopes. Older storage/deployment instructions below are historical where they differ from this guide.
 <!-- SH01 DIRECT SHEETS FOLLOW-UP END -->
@@ -59,3 +61,4 @@ Meta collection is bounded/partial and the code does not implement every request
 ## Rollback
 
 Set `META_SYNC_ENABLED=0` and `GOOGLE_SHEETS_WRITE_ENABLED=0` to stop new optional collector/writer work; turn off any separate downstream clickouts consumer if queue processing must stop. Set `SOCIAL_DELETE_ENABLED=0` on every configured executor. Roll source back through Git/known Worker versions; local patch backups are outside Git. Leave additive D1 tables intact unless a separately reviewed migration is required. A rollback does not undo a post already deleted at Meta/Tumblr or a Sheet append already consumed. Preserve `uncertain` outbox records until reconciled with Sheet/provider evidence.
+

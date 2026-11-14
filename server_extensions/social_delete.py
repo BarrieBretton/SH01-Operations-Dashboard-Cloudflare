@@ -86,8 +86,12 @@ def delete_post(request:DeleteRequest,*,dashboard=None,provider_factory=Provider
     if post.get('delete_status')=='deleted':return {**result,'status':'already_recorded_deleted'}
     # A transport failure after DELETE is ambiguous. No automatic retry is performed.
     try:perform_delete(provider,post)
-    except SafeError:raise
-    except Exception:raise SafeError('delete_outcome_unknown_verify_provider_before_retry') from None
+    except Exception:
+        # A provider rejection/transport loss needs review before another destructive attempt.
+        if post.get('request_id'):
+            try:dashboard.http.json(dashboard.base+'/api/ingest/deletion-result',dashboard.hosts,method='POST',headers=dashboard.headers,payload={'request_id':post['request_id'],'status':'manual_required','reason':'delete_outcome_unconfirmed_verify_provider_before_retry'})
+            except Exception:pass
+        raise SafeError('delete_outcome_unknown_verify_provider_before_retry') from None
     result.update(status='deleted',provider_permissions='delete_succeeded')
     if post.get('request_id'):
         try:dashboard.http.json(dashboard.base+'/api/ingest/deletion-result',dashboard.hosts,method='POST',headers=dashboard.headers,payload={'request_id':post['request_id'],'status':'deleted','reason':'provider_confirmed'})

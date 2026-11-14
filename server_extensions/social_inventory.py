@@ -1,7 +1,7 @@
 """Bounded, opt-in owner-media inventory router. No publishing or deletion routes.
 
 Install with: from social_inventory import router; app.include_router(router)
-All network content stays server-side; only metadata and fingerprints go to D1.
+All network content stays server-side; only metadata and fingerprints go to the dashboard storage.
 """
 from __future__ import annotations
 
@@ -318,7 +318,8 @@ def normalize_post(raw: dict, cfg: dict) -> Post | None:
             kind, url = "VIDEO", raw.get("video_url")
         link, date = raw.get("post_url"), raw.get("timestamp")
         caption = "\n".join(b.get("text", "") for b in raw.get("content", []) if b.get("type") == "text") or raw.get("summary", raw.get("caption", ""))
-        # note_count combines likes/reblogs/replies and must not be reported as likes.
+        # note_count combines likes/reblogs/replies and is preserved as notes.
+        metrics = {"notes": number(raw.get("note_count"))}
     if not kind:
         return None
     metadata = {"platform": platform, "account_id": cfg["account_id"], "account_handle": safe_text(cfg["handle"], 120),
@@ -884,3 +885,21 @@ async def scan_route(request: ScanRequest, x_api_key: str | None = Header(defaul
         raise HTTPException(status_code=status, detail=code) from None
     except Exception:
         raise HTTPException(status_code=503, detail="social_inventory_failed") from None
+
+
+@router.get("/status")
+async def inventory_status(x_api_key: str | None = Header(default=None, alias="X-API-KEY")):
+    expected = os.environ.get("SOCIAL_INVENTORY_API_KEY", "")
+    if not expected:raise HTTPException(status_code=503, detail="social_inventory_not_configured")
+    if not x_api_key or not hmac.compare_digest(expected,x_api_key):raise HTTPException(status_code=401, detail="invalid_api_key")
+    import shutil
+    try:
+        configs=json.loads(os.environ.get("SOCIAL_ACCOUNTS_JSON","{}"))
+        if not isinstance(configs,dict):raise ValueError()
+        configured=len(configs)
+    except Exception:raise HTTPException(status_code=503,detail="social_accounts_config_invalid") from None
+    return {"configured_accounts":configured,"scan_running":_SCAN_LOCK.locked(),
+            "ffmpeg_available":bool(shutil.which("ffmpeg")),"ffprobe_available":bool(shutil.which("ffprobe")),
+            "dashboard_configured":bool(os.environ.get("OPS_DASHBOARD_URL") and os.environ.get("OPS_INGEST_TOKEN")),
+            "delete_enabled":os.environ.get("SOCIAL_DELETE_ENABLED")=="1",
+            "live_provider_access_verified":False,"limits":{"cache":MAX_CACHE,"pairs":MAX_PAIRS,"groups":MAX_GROUPS}}

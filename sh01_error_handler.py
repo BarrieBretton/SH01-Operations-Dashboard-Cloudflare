@@ -1,49 +1,37 @@
-"""Optional SH01 hook: records future ERROR-level Python logs without stack traces.
+"""Opt-in, bounded ERROR telemetry. Sends exception type/module, never log payloads."""
+import hashlib,json,logging,os,queue,threading
+from datetime import datetime,timezone
+from urllib.parse import urlsplit
+from urllib.request import Request,build_opener,HTTPRedirectHandler
 
-In app.py after logger setup:
-    from sh01_error_handler import install_ops_handler
-    install_ops_handler(logger)
-
-On Render set OPS_DASHBOARD_URL and OPS_INGEST_TOKEN for each SH01 service.
-"""
-import hashlib
-import json
-import logging
-import os
-import re
-import threading
-import urllib.request
-from datetime import datetime, timezone
-
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
 
 class OpsHandler(logging.Handler):
-    def emit(self, record):
-        if record.levelno < logging.ERROR or not os.getenv("OPS_DASHBOARD_URL") or not os.getenv("OPS_INGEST_TOKEN"):
-            return
-        # Do not send exception/stack or arbitrary formatted log payload. Only
-        # the exception class, module and logging template are transferred.
-        template = record.msg if isinstance(record.msg, str) else type(record.msg).__name__
-        template = re.sub(r"(?i)(token|password|secret|api[_-]?key)\s*[=:]\s*\S+", "[REDACTED]", template)
-        template = re.sub(r"eyJ[A-Za-z0-9_-]{18,}\.eyJ[A-Za-z0-9_-]{18,}\.[A-Za-z0-9_-]{12,}", "[REDACTED]", template)
-        name = record.exc_info[0].__name__ if record.exc_info and record.exc_info[0] else ""
-        message = (record.module + ": " + (name or record.levelname) + " · " + template[:200])[:350]
-        at = datetime.fromtimestamp(record.created, timezone.utc).isoformat()
-        event_id = hashlib.sha256((at + record.name + message).encode()).hexdigest()
-        payload = json.dumps({"source": "sh01", "event_id": event_id, "happened_at": at,
-                              "service": os.getenv("RENDER_SERVICE_ID", "sh01"), "message": message}).encode()
-        url = os.environ["OPS_DASHBOARD_URL"].rstrip("/") + "/api/ingest/event"
-        key = os.environ["OPS_INGEST_TOKEN"]
-        def send():
+    def __init__(self):
+        super().__init__(logging.ERROR);self.events=queue.Queue(maxsize=100)
+        threading.Thread(target=self._send,daemon=True,name='ops-error-telemetry').start()
+    def emit(self,record):
+        if record.levelno<logging.ERROR or not os.getenv('OPS_DASHBOARD_URL') or not os.getenv('OPS_INGEST_TOKEN'):return
+        at=datetime.fromtimestamp(record.created,timezone.utc).isoformat()
+        # Formatted messages and even templates can contain interpolated secrets. Only classes are sent.
+        kind=record.exc_info[0].__name__ if record.exc_info and record.exc_info[0] else record.levelname
+        message=f'{record.module}: {kind}'[:200]
+        event={'source':'sh01','event_id':hashlib.sha256((at+record.name+message).encode()).hexdigest(),
+               'happened_at':at,'service':os.getenv('RENDER_SERVICE_ID','sh01'),'message':message}
+        try:self.events.put_nowait(event)
+        except queue.Full:pass
+    def _send(self):
+        opener=build_opener(NoRedirect())
+        while True:
+            event=self.events.get()
             try:
-                req = urllib.request.Request(url, payload, method="POST", headers={
-                    "X-INGEST-KEY": key, "Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=5):
-                    pass
-            except Exception:
-                pass  # Prevent telemetry failures from affecting app requests.
-        threading.Thread(target=send, daemon=True).start()
-
+                host=os.environ['OPS_DASHBOARD_URL'].rstrip('/');u=urlsplit(host)
+                if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path:continue
+                req=Request(host+'/api/ingest/event',json.dumps(event).encode(),method='POST',headers={'X-INGEST-KEY':os.environ['OPS_INGEST_TOKEN'],'Content-Type':'application/json','User-Agent':'SH01-Error-Telemetry/2'})
+                with opener.open(req,timeout=5):pass
+            except Exception:pass
+            finally:self.events.task_done()
 
 def install_ops_handler(logger):
-    if not any(isinstance(h, OpsHandler) for h in logger.handlers):
-        logger.addHandler(OpsHandler())
+    if not any(isinstance(h,OpsHandler) for h in logger.handlers):logger.addHandler(OpsHandler())

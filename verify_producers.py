@@ -2,6 +2,7 @@
 
 GET requests only. Prints counts/validation results, never credentials or rows.
 """
+from read_only_client import ReadOnlyClient, VerificationError
 import json
 import getpass
 import os
@@ -14,10 +15,18 @@ def main():
  u=urlsplit(host)
  if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment or u.path not in ('','/') or not token:
   raise SystemExit('Set HTTPS OPS_DASHBOARD_URL and DASHBOARD_TOKEN locally.')
- def get(path):
+ client=ReadOnlyClient(host,token,pace=15)
+ get=client.get
+ for attempt in range(3):
   try:
-   with urlopen(Request(host+path,headers={'Authorization':'Bearer '+token,'User-Agent':'SH01-Operations-ReadOnly-QC/2.0'}),timeout=45) as r:return json.load(r)
-  except HTTPError as e:raise RuntimeError('Read-only verification HTTP '+str(e.code)) from None
+   verify(client);return
+  except VerificationError as e:
+   if e.status!=409 or attempt==2:raise
+   print('Snapshot changed; restarting full verification',attempt+1,'of 2')
+   client.sleep(20)
+
+def verify(client):
+ get=client.get
  data=get('/api/producers');catalog=get('/api/producer-sources')
  assert data.get('policy_version')==2,'Wrong deployed version'
  assert not data.get('warning'),'Queue Sheets sync first; no corrected snapshot yet'

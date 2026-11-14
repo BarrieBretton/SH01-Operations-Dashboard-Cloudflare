@@ -1,3 +1,5 @@
+> **Current instructions (5 November 2026):** [Implementation and acceptance](../docs/IMPLEMENTATION-ACCEPTANCE.md). The historical setup and deployment observations below apply to their original revision. For this upgrade, retain the existing verified Sheets cutover, use the single minute cron, and follow the current guide for Meta pacing, companion integration and live checks.
+
 <!-- SH01 DIRECT SHEETS FOLLOW-UP BEGIN -->
 > **Current storage instructions:** the existing Cloudflare Worker calls the Google Sheets API directly using its existing Google OAuth credentials. No Apps Script project, gateway URL or gateway secret is required. Follow [../SHEETS-MIGRATION.md](../SHEETS-MIGRATION.md): deploy with `SHEETS_STORAGE_READY=0`, verify the live write guard and all-table copy, then set `SHEETS_STORAGE_READY=1`. Cloud deployment and cutover remain pending until verified. Existing optional business-sheet write flags and platform credentials remain in their current scopes. Older storage/deployment instructions below are historical where they differ from this guide.
 <!-- SH01 DIRECT SHEETS FOLLOW-UP END -->
@@ -242,3 +244,8 @@ exact preview confirmation. Leave deletion disabled during setup. See
 [workflow integration](../workflows/README.md) and [rollout tracker](../DEPLOYMENT-TRACKER.md).
 No automatic scanner/deleter schedule is installed. Existing clickouts consumers
 must be considered before appending any real deletion links.
+
+
+## Installed companion and resumable operation
+
+The coordinated FastAPI PR mounts `/social/inventory/scan`, `/social/inventory/status` and `/social/posts/delete` and installs bounded root-logger ERROR telemetry. `SOCIAL_ACCOUNTS_JSON` is an object keyed by dashboard account ID (the existing config contract), not an array. Use the dashboard repo `run_social_scan.py` for private atomic checkpoints. Use `/social/inventory/status` with the social key for configured-account counts and FFmpeg readiness; it does not test provider credentials. No deletion flag is enabled by installation.

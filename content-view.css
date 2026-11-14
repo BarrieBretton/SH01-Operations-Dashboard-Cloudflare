@@ -5,3 +5,5 @@ html[data-theme=light]{--success:#17683b;--success-bg:#e4f5ec;--warn:#805100;--w
 @media(max-width:1100px){.content-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.status-grid{grid-template-columns:1fr 1fr}}@media(max-width:700px){.section-heading{display:block}.section-heading>.btn{margin-bottom:12px}.content-grid,.status-grid,.review-columns{grid-template-columns:1fr}.content-nav .btn{flex:1;padding:9px}.content-nav{gap:6px}.control label{min-width:0}.search{min-width:140px!important}.content-card .content-metrics{grid-template-columns:repeat(4,1fr)}.content-footer{align-items:start}.nav button{padding:10px}.review-panel{padding:14px}.selection-bar>span{flex-basis:100%}}
 
 .eyebrow{color:var(--accent)}.platform-tumblr{color:var(--info)}.platform-google_sheets,.platform-google_drive{color:var(--accent)}.platform-pinterest_rapidapi{color:var(--pin)}
+
+#meta-progress{padding:14px 0;line-height:1.6}#meta-account-observations td{max-width:420px;overflow-wrap:anywhere}#content-window-summary{line-height:1.7;margin:12px 0}

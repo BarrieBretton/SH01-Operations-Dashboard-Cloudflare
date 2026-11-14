@@ -1,0 +1,94 @@
+{
+  "name": "SH01 safe failure logger",
+  "active": false,
+  "nodes": [
+    {
+      "id": "3bf6e0d8-8a36-55e0-ae28-93ef7b09878b",
+      "name": "Workflow failure",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        0,
+        0
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "9121bd95-0274-5aca-a77a-7f5f85eeb8e8",
+      "name": "Safe failure metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const x=$input.first().json;const safe=v=>String(v||'').replace(/[^A-Za-z0-9_.:@-]/g,'').slice(0,120);\nconst workflow=safe(x.workflow?.id),execution=safe(x.execution?.id);\nreturn [{json:{source:'n8n',event_id:workflow+':'+(execution||String(Date.now())),happened_at:new Date().toISOString(),workflow_name:workflow,workflow_url:workflow?'https://n8n-prod-1.vivojaymail.workers.dev/workflow/'+encodeURIComponent(workflow):'',severity:'error',service:'n8n',message:'workflow_execution_failed'}}];"
+      },
+      "position": [
+        300,
+        0
+      ],
+      "notes": "",
+      "notesInFlow": false
+    },
+    {
+      "id": "99ed44c9-cb41-5f0d-a652-785ec30ef1ae",
+      "name": "Record failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "https://sh01-operations-dashboard-cloudflare.vivojaymail.workers.dev/api/ingest/event",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "position": [
+        600,
+        0
+      ],
+      "notes": "Bind X-INGEST-KEY credential. Set this imported workflow as the error workflow on intended workflows. Raw errors and execution data are omitted.",
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Workflow failure": {
+      "main": [
+        [
+          {
+            "node": "Safe failure metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safe failure metadata": {
+      "main": [
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none"
+  },
+  "pinData": {},
+  "tags": []
+}

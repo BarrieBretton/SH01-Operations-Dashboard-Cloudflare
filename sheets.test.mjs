@@ -2,7 +2,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-const read=n=>fs.readFileSync(new URL(n,import.meta.url),'utf8');
+const read=n=>fs.readFileSync(new URL(n,import.meta.url),'utf8').replace(/\r\n/g,'\n');
 test('deployed Worker embeds current source registry, policy, collector and UI',()=>{
  const worker=read('./worker.js');
  assert.ok(worker.includes(read('./producer-policy.js').trim()));

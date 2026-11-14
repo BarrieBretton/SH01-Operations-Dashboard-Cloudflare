@@ -1,3 +1,5 @@
+> **Current instructions (5 November 2026):** [Implementation and acceptance](docs/IMPLEMENTATION-ACCEPTANCE.md). The historical setup and deployment observations below apply to their original revision. For this upgrade, retain the existing verified Sheets cutover, use the single minute cron, and follow the current guide for Meta pacing, companion integration and live checks.
+
 # Google Sheets storage — direct API migration
 
 ## Current checkpoint
@@ -126,3 +128,4 @@ Official references: [atomic batch updates](https://developers.google.com/worksp
 
 ## Google Sheets request compatibility fix
 The direct Sheets adapter uses redirect: manual and rejects HTTP 3xx. Cloudflare Workers rejects redirect: error before sending a request; the previous handler mislabeled this store_network_unavailable. Rebuild and deploy before retrying migration. Keep SHEETS_STORAGE_READY=0 until all table hashes match.
+

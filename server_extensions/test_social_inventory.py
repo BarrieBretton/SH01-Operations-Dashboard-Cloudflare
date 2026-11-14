@@ -217,7 +217,7 @@ class InventoryTest(unittest.TestCase):
                "content": [{"type": "video", "media": {"url": "https://vt.tumblr.com/video.mp4"}}]}
         p = s.normalize_post(raw, cfg)
         self.assertEqual(p.metadata["media_type"], "VIDEO")
-        self.assertEqual(p.metadata["metrics"], {})
+        self.assertEqual(p.metadata["metrics"], {"notes": 200})
         fb = {"id": "1_2", "permalink_url": "https://www.facebook.com/page/posts/2", "attachments": {"data": [{"media_type": "video", "target": {"id": "42"}, "media": {"image": {"src": "https://fbcdn.net/thumbnail.jpg"}}}]}}
         p = s.normalize_post(fb, dict(CFG, platform="facebook"))
         self.assertEqual(p.metadata["media_type"], "VIDEO")

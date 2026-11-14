@@ -21,7 +21,7 @@ export function setup(){
  };
  let fail=null;
  const fetch=async u=>{if(fail==='all')return {ok:false,status:403};if(u.includes('oauth2'))return {ok:true,json:async()=>({access_token:'test-access'})};const range=decodeURIComponent(u.split('/values/')[1]||''),name=range.split("'")[1];if(fail===name)return {ok:false,status:403};return {ok:true,json:async()=>({values:fixtures[name]||[['status'],['staged'],['used']]})}};
- const c={crypto:webcrypto,TextEncoder,AbortSignal,URLSearchParams,URL,Date,Map,Set,setTimeout,console,clean:s=>String(s),json:x=>x,error:(m,s)=>({error:m,status:s}),fetch};
+ const c={collectorDiagnostic:()=>{},crypto:webcrypto,TextEncoder,AbortSignal,URLSearchParams,URL,Date,Map,Set,setTimeout,console,clean:s=>String(s),json:x=>x,error:(m,s)=>({error:m,status:s}),fetch};
  attachStore(env,sql,c);vm.createContext(c);vm.runInContext(code+';globalThis.f={sheetRows,sheetSync,liveProducerList,liveProducerItems,sheetStatus,producerSources,producerReady,producerConsumed,producerStatusValue,producerStockState,producerThreshold,producerURL};',c);
  return {env,c,sql,fixtures,fail:x=>{fail=x}};
 }

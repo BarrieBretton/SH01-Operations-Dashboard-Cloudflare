@@ -102,7 +102,7 @@ async function queueCleanup(env,b){
 }
 async function contentStatus(env){
  const {tables}=await env.STORE.snapshot(['content_jobs','content_sheet_outbox']);const counts={};for(const r of tables.content_sheet_outbox)counts[r.status]=(counts[r.status]||0)+1;
- return {storage_backend:'google_sheets',meta_sync:tables.content_jobs.find(r=>r.id==='meta_collect'),meta_sync_enabled:env.META_SYNC_ENABLED==='1',schema_ready:true,sheet_write_enabled:env.GOOGLE_SHEETS_WRITE_ENABLED==='1',post_sheet:POST_SHEET,clickouts_sheet:'clickouts',mirror:tables.content_jobs.find(r=>r.id==='sheet_mirror'),outbox:Object.entries(counts).map(([status,count])=>({status,count})),delete_execution:'requires_configured_executor',schedule_interval_minutes:10};
+ return {storage_backend:'google_sheets',meta_sync:tables.content_jobs.find(r=>r.id==='meta_collect'),meta_sync_enabled:env.META_SYNC_ENABLED==='1',schema_ready:true,sheet_write_enabled:env.GOOGLE_SHEETS_WRITE_ENABLED==='1',post_sheet:POST_SHEET,clickouts_sheet:'clickouts',mirror:tables.content_jobs.find(r=>r.id==='sheet_mirror'),outbox:Object.entries(counts).map(([status,count])=>({status,count})),delete_execution:'requires_configured_executor',schedule_interval_minutes:10,meta_interval_seconds:Math.max(60,Math.min(3600,Number(env.META_SYNC_INTERVAL_SECONDS)||60))};
 }
 async function contentSheetWrite(env,token,path,data){
  const r=await fetch('https://sheets.googleapis.com/v4/spreadsheets/'+encodeURIComponent(env.GOOGLE_SHEETS_SPREADSHEET_ID)+path,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(20000)});
@@ -184,6 +184,7 @@ async function contentApi(req,env,ctx) {
  }
  if(p==='/api/content/preview'&&req.method==='GET'){
   const row=await env.STORE.find('content_posts',{platform:contentPlatform(u.searchParams.get('platform')),account_id:contentID(u.searchParams.get('account_id')),post_id:contentID(u.searchParams.get('post_id'))});const v=contentPreview(row?.preview_url);
+  if(row&&u.searchParams.get('refresh')==='1'){try{const fresh=await metaPreview(env,row);if(fresh?.available)return json({...fresh,expires_warning:'Refreshed from provider; playback availability depends on the CDN.'});}catch{return json({url:'',kind:row.preview_type||'image',available:false,reason:'provider_preview_refresh_failed'});}}
   return json({url:v,kind:row?.preview_type||'image',available:!!v,expires_warning:'Provider CDN links can expire. Sync again to refresh; an absent preview does not mean the post was deleted.'});
  }
  if(p==='/api/ingest/resolve-post'&&req.method==='POST'){

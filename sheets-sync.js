@@ -119,17 +119,19 @@ async function liveProducerList(env){
 }
 async function liveProducerItems(env,id,request){
  const state=await sheetStatus(env),u=new URL(request?.url||'https://local.invalid/'),requested=u.searchParams.get('version')||state.last_success,version=state.active_version;
- if(requested!==state.last_success)return error('Producer snapshot changed; refresh inventory',409);
+ if(requested!==state.last_success)return error('snapshot_changed_retry',409);
  if(!version||id===SOURCE_META_ID)return error('Producer snapshot unavailable',404);
  const record=await env.STORE.find('sheet_live_producers',{version,producer_id:id});
- if(!record||JSON.parse(record.payload).policy_version!==2)return error('Producer snapshot expired; refresh inventory',409);
+ if(!record||JSON.parse(record.payload).policy_version!==2)return error('snapshot_expired',409);
  const offset=Number(u.searchParams.get('offset')||0),limit=200;if(!Number.isSafeInteger(offset)||offset<0||offset>100000)return error('Invalid offset',400);
  const data=storeSort((await env.STORE.rows('sheet_live_items')).filter(r=>r.version===version&&r.producer_id===id),'item_id').slice(offset,offset+limit+1);
- const after=await sheetStatus(env);if(after.last_success!==state.last_success)return error('Producer snapshot changed; refresh inventory',409);
+ const after=await sheetStatus(env);if(after.last_success!==state.last_success)return error('snapshot_changed_retry',409);
  return json({rows:data.slice(0,limit).map(x=>JSON.parse(x.payload)),next_offset:data.length>limit?offset+limit:null,version:requested});
 }
 async function producerSources(env){
+ const observations=new Map((await env.STORE.rows('content_collect_state')).filter(r=>r.id.startsWith('source:')).map(r=>{const o=JSON.parse(r.payload);return [o.source_id,{...o,stale:Date.now()-Date.parse(o.checked_at)>1800000}]}));
  const state=await sheetStatus(env),meta=await sourceMeta(env,state),routes=meta?.routes??SOURCE_REGISTRY.schedule,assoc=sourceAssociations(routes);
- return json({coverage:SOURCE_REGISTRY.coverage,source_archive:SOURCE_REGISTRY.source_archive,evidence_date:SOURCE_REGISTRY.evidence_date,workflow_sha256:SOURCE_REGISTRY.workflow_sha256,workflow_scope:SOURCE_REGISTRY.scope,workflow_base_url:producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev'),schedule_evidence:meta?(meta.schedule_state==='ok'?'live_sheet':'live_sheet_unavailable'):'handoff_snapshot',references:meta?.references||[],issues:SOURCE_REGISTRY.issues,calls:SOURCE_REGISTRY.calls,schedule:routes.map(r=>({...r,workflow_url:r.workflow_id?producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id):''})),rows:SOURCE_REGISTRY.sources.map(s=>{const evidence=assoc.get(s.source_id)||[];return {...s,accounts:[...new Set(evidence.flatMap(e=>e.accounts))],account_evidence:evidence,measurement:s.kind==='pinterest_rapidapi'?'on_demand_not_finite_stock':'not_connected',remaining:null}})});
+ return json({coverage:SOURCE_REGISTRY.coverage,source_archive:SOURCE_REGISTRY.source_archive,evidence_date:SOURCE_REGISTRY.evidence_date,workflow_sha256:SOURCE_REGISTRY.workflow_sha256,workflow_scope:SOURCE_REGISTRY.scope,workflow_base_url:producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev'),schedule_evidence:meta?(meta.schedule_state==='ok'?'live_sheet':'live_sheet_unavailable'):'handoff_snapshot',references:meta?.references||[],issues:SOURCE_REGISTRY.issues,calls:SOURCE_REGISTRY.calls,schedule:routes.map(r=>({...r,workflow_url:r.workflow_id?producerURL(env.N8N_WORKFLOW_BASE_URL||'https://n8n-prod-1.vivojaymail.workers.dev').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id):''})),rows:SOURCE_REGISTRY.sources.map(s=>{const evidence=assoc.get(s.source_id)||[];return {...s,observation:observations.get(s.source_id)||null,accounts:[...new Set(evidence.flatMap(e=>e.accounts))],account_evidence:evidence,measurement:s.kind==='pinterest_rapidapi'?'on_demand_not_finite_stock':'not_connected',remaining:null}})});
 }
+
 

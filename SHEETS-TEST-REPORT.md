@@ -1,3 +1,5 @@
+> **Current instructions (5 November 2026):** [Implementation and acceptance](docs/IMPLEMENTATION-ACCEPTANCE.md). The historical setup and deployment observations below apply to their original revision. For this upgrade, retain the existing verified Sheets cutover, use the single minute cron, and follow the current guide for Meta pacing, companion integration and live checks.
+
 # Direct Sheets storage verification
 
 ## Local evidence

@@ -32,7 +32,7 @@ async function runStoredJobs(raw){
  if(raw.SHEETS_STORAGE_READY!=='1')return;const env=storageEnv(raw),snap=await env.STORE.snapshot(['content_collect_state','content_jobs','sheet_sync_state']);
  const jobs=[['sheets',snap.tables.sheet_sync_state[0],sheetSync,true],['sheet_mirror',snap.tables.content_jobs.find(r=>r.id==='sheet_mirror'),mirrorContentSheets,env.GOOGLE_SHEETS_WRITE_ENABLED==='1'],['meta_collect',snap.tables.content_jobs.find(r=>r.id==='meta_collect'),metaSync,env.META_SYNC_ENABLED==='1']];
  jobs.sort((a,b)=>{const ra=snap.tables.content_collect_state.find(r=>r.id==='request:'+a[0]),rb=snap.tables.content_collect_state.find(r=>r.id==='request:'+b[0]);return Number(!!rb)-Number(!!ra)||String(a[1]?.last_attempt||'').localeCompare(String(b[1]?.last_attempt||''));});
- for(const [id,state,fn,automatic] of jobs){const request=snap.tables.content_collect_state.find(r=>r.id==='request:'+id),due=automatic&&(!state?.last_attempt||Date.now()-Date.parse(state.last_attempt)>=600000);if(!request&&!due)continue;if(state?.lease_until>Date.now())continue;
+ for(const [id,state,fn,automatic] of jobs){const request=snap.tables.content_collect_state.find(r=>r.id==='request:'+id),due=automatic&&(!state?.last_attempt||Date.now()-Date.parse(state.last_attempt)>=(id==='meta_collect'?Math.max(60,Math.min(3600,Number(env.META_SYNC_INTERVAL_SECONDS)||60))*1000:600000));if(!request&&!due)continue;if(state?.lease_until>Date.now())continue;
   let result;try{result=await fn(env)}catch(e){collectorDiagnostic('scheduler_'+id,e);result={status:'failed'};const code=({'META_SYSVAR missing':'meta_credential_missing','META_SYSVAR structure invalid':'meta_credential_invalid_json','META_SYSVAR has no supported access token field':'meta_credential_token_field_missing','META_SYSVAR credential format unsupported':'meta_credential_format_unsupported'}[e.message]||(/^[a-z][a-z0-9_]{2,100}$/.test(e.message||'')?e.message:'collector_failed'));const table=id==='sheets'?'sheet_sync_state':'content_jobs',jobId=id==='sheets'?1:id;try{await env.STORE.transact([table,'content_collect_state'],tx=>{const job=tx.find(table,{id:jobId});if(job&&(!job.lease_until||job.lease_until<Date.now())){Object.assign(job,{status:'failed',last_attempt:contentNow(),error_code:code,lease:null,lease_until:null});if(request&&tx.find('content_collect_state',{id:request.id})?.payload===request.payload)tx.remove('content_collect_state',{id:request.id});}});}catch{}}
   // The successful job claim consumes requests atomically; requests arriving during work remain queued.
   return; // One bounded collector per invocation avoids stacking provider/subrequest budgets.
@@ -59,6 +59,7 @@ export default {
   if(p==='/api/sheets/status'&&req.method==='GET')return json(await sheetStatus(env));
   if(p==='/api/sheets/sync'&&req.method==='POST'){return json(await queueStoredJob(env,'sheets'),202);}
   if(p.startsWith('/api/meta/'))return await metaApi(req,env);
+  if(ingest&&req.method==='POST'&&p==='/api/ingest/source-observations')return await ingestSourceObservations(req,env);
   if(ingest&&req.method==='POST'&&p==='/api/ingest/event')return await ingestEvent(req,env);
   if(ingest&&req.method==='POST'&&p==='/api/ingest/producer')return await ingestProducer(req,env);
   if(req.method==='GET'&&p==='/api/failures')return await listFailures(req,env);
@@ -69,3 +70,4 @@ export default {
  }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed';return json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);}
  }
 };
+
