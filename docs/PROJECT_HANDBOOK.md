@@ -38,3 +38,9 @@ The existing Cloudflare Worker serves the authenticated UI and APIs, runs one bo
 - Existing content/producer/failure/Sheet APIs retain authentication and storage boundaries.
 
 Do not apply historical D1 initial-setup instructions to an already migrated Worker. The current trigger is `* * * * *`; due times and Meta throttling are documented in the acceptance guide. Keep this handbook and the acceptance record current with code/configuration changes.
+
+## 2026-11-14 Meta transport correction
+Workers rejects redirect:error before sending the request. The shared Graph
+helper now uses manual and rejects all 3xx responses without following them
+or forwarding credentials. Collection and preview refresh use this helper.
+Local targeted tests passed; live recovery requires post-deployment verification.
