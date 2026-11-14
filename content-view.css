@@ -7,3 +7,26 @@ html[data-theme=light]{--success:#17683b;--success-bg:#e4f5ec;--warn:#805100;--w
 .eyebrow{color:var(--accent)}.platform-tumblr{color:var(--info)}.platform-google_sheets,.platform-google_drive{color:var(--accent)}.platform-pinterest_rapidapi{color:var(--pin)}
 
 #meta-progress{padding:14px 0;line-height:1.6}#meta-account-observations td{max-width:420px;overflow-wrap:anywhere}#content-window-summary{line-height:1.7;margin:12px 0}
+
+/* Image-first gallery: quiet at rest, complete on hover or keyboard focus. */
+.content-grid{gap:18px;padding:12px 8px 20px;align-items:start;isolation:isolate}
+.gallery-card{position:relative;display:block;overflow:visible;border:0;border-radius:18px;background:var(--bg);transition:transform .28s cubic-bezier(.2,.7,.2,1),box-shadow .28s;transform-origin:center;box-shadow:0 8px 26px #0000001a}
+.gallery-card.is-selected{outline:2px solid var(--accent);outline-offset:4px}
+.gallery-card .media-preview{aspect-ratio:4/5;border:0;border-radius:18px;background:var(--bg);outline-offset:4px}
+.gallery-card .media-preview img,.gallery-card .media-preview video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.gallery-card .media-preview img.preview-full{object-fit:contain;background:var(--bg);opacity:0;transition:opacity .28s ease;pointer-events:none}
+.gallery-card .media-preview:focus-within img.preview-full{opacity:1}
+.gallery-card .media-preview:focus-within video{object-fit:contain}
+.gallery-card:focus-within{z-index:5}
+.gallery-card .preview-close{left:12px;right:auto;top:12px;opacity:0;transition:opacity .2s;background:var(--field)}
+.gallery-card:focus-within .preview-close{opacity:1}
+.post-corner{position:absolute;right:12px;top:12px;z-index:7}
+.post-info-toggle{display:grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid #ffffff66;border-radius:50%;background:#111b25c9;color:#fff;box-shadow:0 2px 12px #0003;cursor:pointer;font:italic 700 18px Georgia,serif;backdrop-filter:blur(12px)}
+.post-info-toggle:hover,.post-info-toggle[aria-pressed=true]{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.post-info{position:absolute;right:-2px;top:38px;width:clamp(240px,28vw,360px);max-width:calc(100vw - 64px);max-height:min(68vh,540px);overflow:auto;overscroll-behavior:contain;padding:20px;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--ink);box-shadow:0 20px 60px #0006;animation:post-info-in .18s ease-out}
+.post-info[hidden]{display:none!important}.gallery-card.info-open{z-index:10}.post-info-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.post-info-heading .btn{font-size:11px;padding:5px 9px}.post-corner:not(.is-pinned) [data-info-hide]{visibility:hidden}
+.post-info h3{font-size:20px;margin:18px 0 10px}.post-time{display:flex;flex-direction:column;gap:4px;margin:8px 0 14px}.post-time>strong{font-size:15px;color:var(--accent)}.post-time>span{font-size:11px;color:var(--muted);line-height:1.5}.post-info .content-caption{white-space:pre-wrap;font-size:13px;line-height:1.65;min-height:0}.post-id{font-size:10px;overflow-wrap:anywhere;color:var(--muted);margin:10px 0}.post-info-bottom{margin:18px 0;padding-top:12px;border-top:1px solid var(--line)}
+@keyframes post-info-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+@media(hover:hover) and (pointer:fine){.gallery-card:hover{transform:scale(1.045);z-index:5;box-shadow:0 22px 60px #0006}.gallery-card.info-open:hover{z-index:10}.gallery-card:hover .preview-full{opacity:1}.gallery-card:hover video{object-fit:contain}.gallery-card:hover .preview-close{opacity:1}}
+@media(max-width:700px){.content-grid{padding:8px 0;gap:22px}.gallery-card .media-preview{aspect-ratio:4/5}.post-info{width:min(340px,calc(100vw - 82px));max-height:60vh}.post-info-toggle{width:40px;height:40px}.post-info{top:46px}}
+@media(prefers-reduced-motion:reduce){.gallery-card,.gallery-card .preview-full,.gallery-card .preview-close{transition:none}.gallery-card:hover{transform:none}.post-info{animation:none}}

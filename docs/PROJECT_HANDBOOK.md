@@ -44,3 +44,6 @@ Workers rejects redirect:error before sending the request. The shared Graph
 helper now uses manual and rejects all 3xx responses without following them
 or forwarding credentials. Collection and preview refresh use this helper.
 Local targeted tests passed; live recovery requires post-deployment verification.
+
+## Image-first gallery and automatic previews (2026-11-14)
+Large 4:5 cropped previews expand smoothly and reveal the complete image on hover or keyboard focus. A small information corner reveals full captions, metrics, identifiers, links and comparison controls; clicking pins details until Hide or Escape. Displayed dates use UTC AM/PM, with relative labels above post times. Touch and reduced-motion users have accessible alternatives. Previews warm within 1800px, two at a time, with nearest-card priority and bounded two-minute caching; videos do not autoplay. Leaving the tab cancels pending work; locking clears cached previews. This does not refresh analytics or fetch additional library pages. 83 local JavaScript tests passed; real-browser visual and fast-scroll acceptance remains pending.
