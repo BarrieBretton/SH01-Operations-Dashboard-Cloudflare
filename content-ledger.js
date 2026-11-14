@@ -73,7 +73,7 @@ function groupFromTables(groups,posts,id){const g=groups.find(x=>x.group_id===id
 async function duplicateGroup(env,id){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts']);return groupFromTables(tables.content_duplicate_groups,tables.content_posts,contentID(id));}
 async function ingestGroups(env,groups){
  if(!Array.isArray(groups)||groups.length>10)throw Error('maximum_10_groups');
- await env.STORE.transact(['content_duplicate_groups','content_posts'],tx=>{for(const x of groups){const id=contentID(x.group_id),platform=contentPlatform(x.platform),account=contentID(x.account_id),ids=[...new Set((x.members||[]).map(contentID))];if(ids.length<2||ids.length>100||!['IMAGE','VIDEO'].includes(x.media_type)||JSON.stringify(x.evidence||{}).length>4000)throw Error('invalid_duplicate_group');const rows=tx.rows('content_posts').filter(r=>r.platform===platform&&r.account_id===account&&ids.includes(r.post_id));if(rows.length!==ids.length||rows.some(r=>(['VIDEO','REELS'].includes(r.media_type)?'VIDEO':r.media_type)!==x.media_type))throw Error('mixed_or_missing_group_members');tx.put('content_duplicate_groups',{group_id:id,platform,account_id:account,media_type:x.media_type,algorithm:clean(x.algorithm,100),confidence:'candidate',members:JSON.stringify(ids.sort()),evidence:JSON.stringify(x.evidence||{}),updated_at:contentNow()});}});return {accepted:groups.length};
+ await env.STORE.transact(['content_duplicate_groups','content_posts'],tx=>{for(const x of groups){const id=contentID(x.group_id),platform=contentPlatform(x.platform),account=contentID(x.account_id),ids=[...new Set((x.members||[]).map(contentID))];if(ids.length<2||ids.length>100||!['IMAGE','VIDEO'].includes(x.media_type)||JSON.stringify(x.evidence||{}).length>4000)throw Error('invalid_duplicate_group');const rows=tx.rows('content_posts').filter(r=>r.platform===platform&&r.account_id===account&&ids.includes(r.post_id));if(rows.length!==ids.length||rows.some(r=>(['VIDEO','REELS'].includes(r.media_type)?'VIDEO':r.media_type==='POST'&&r.fingerprint?JSON.parse(r.fingerprint).media_type:r.media_type)!==x.media_type))throw Error('mixed_or_missing_group_members');tx.put('content_duplicate_groups',{group_id:id,platform,account_id:account,media_type:x.media_type,algorithm:clean(x.algorithm,100),confidence:'candidate',members:JSON.stringify(ids.sort()),evidence:JSON.stringify(x.evidence||{}),updated_at:contentNow()});}});return {accepted:groups.length};
 }
 function rankDuplicateMembers(members,k,strategy,metric) {
  if(!['best','worst'].includes(strategy))throw Error('explicit_keep_strategy_required');
@@ -158,11 +158,11 @@ async function mirrorContentSheets(env){
 async function contentApi(req,env,ctx) {
  const u=new URL(req.url),p=u.pathname;
  if(p==='/api/content/status')return json(await contentStatus(env));
- 
+
  if(p==='/api/ingest/posts'&&req.method==='POST')return json(await upsertPosts(env,(await body(req)).posts));
  if(p==='/api/ingest/duplicate-groups'&&req.method==='POST')return json(await ingestGroups(env,(await body(req)).groups));
  if(p==='/api/ingest/fingerprints'&&req.method==='GET'){
-  const rows=storeSort((await env.STORE.rows('content_posts')).filter(r=>r.platform===contentPlatform(u.searchParams.get('platform'))&&r.account_id===contentID(u.searchParams.get('account_id'))&&r.fingerprint),'post_id').slice(Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0)),Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0))+101).map(({post_id,fingerprint})=>({post_id,fingerprint}));
+  const rows=storeSort((await env.STORE.rows('content_posts')).filter(r=>r.platform===contentPlatform(u.searchParams.get('platform'))&&r.account_id===contentID(u.searchParams.get('account_id'))&&r.fingerprint&&r.delete_status==='published'),'post_id').slice(Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0)),Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0))+101).map(({post_id,fingerprint})=>({post_id,fingerprint}));
   return json({fingerprints:rows.slice(0,100).map(r=>({...r,fingerprint:JSON.parse(r.fingerprint)})),has_more:rows.length>100});
  }
  if(p==='/api/content/sheets/setup'&&req.method==='POST')return json(await setupContentSheet(env));
@@ -182,11 +182,7 @@ async function contentApi(req,env,ctx) {
   const data=storeSort((await env.STORE.rows('content_observations')).filter(r=>r.platform===platform&&r.account_id===account&&r.post_id===id),'observed_at').slice(0,2001);
   const rows=data.slice(0,2000).flatMap(r=>{const v=JSON.parse(r.metrics)[metric];return Number.isFinite(v)?[{observed_at:r.observed_at,value:v}]:[]});return json({rows,metric,truncated:data.length>2000,first_observed:rows[0]?.observed_at||null,meaning:'Snapshot totals and observed interval deltas, not event timestamps or reconstructed past growth.'});
  }
- if(p==='/api/content/preview'&&req.method==='GET'){
-  const row=await env.STORE.find('content_posts',{platform:contentPlatform(u.searchParams.get('platform')),account_id:contentID(u.searchParams.get('account_id')),post_id:contentID(u.searchParams.get('post_id'))});const v=contentPreview(row?.preview_url);
-  if(row&&u.searchParams.get('refresh')==='1'){try{const fresh=await metaPreview(env,row);if(fresh?.available)return json({...fresh,expires_warning:'Refreshed from provider; playback availability depends on the CDN.'});}catch{return json({url:'',kind:row.preview_type||'image',available:false,reason:'provider_preview_refresh_failed'});}}
-  return json({url:v,kind:row?.preview_type||'image',available:!!v,expires_warning:'Provider CDN links can expire. Sync again to refresh; an absent preview does not mean the post was deleted.'});
- }
+ if(p==='/api/content/preview'&&req.method==='GET')return json(await cachedContentPreview(env,u));
  if(p==='/api/ingest/resolve-post'&&req.method==='POST'){
   const b=await body(req),platform=contentPlatform(b.platform),permalink=canonicalPostURL(b.permalink,platform),{tables}=await env.STORE.snapshot(['content_posts','content_deletion_queue']);const rows=tables.content_posts.filter(r=>r.platform===platform&&r.permalink===permalink).map(p=>({platform:p.platform,account_id:p.account_id,post_id:p.post_id,permalink:p.permalink,delete_status:p.delete_status,request_id:tables.content_deletion_queue.find(q=>q.platform===p.platform&&q.account_id===p.account_id&&q.post_id===p.post_id)?.request_id||null}));
   if(rows.length!==1)throw Error('post_mapping_missing_or_ambiguous');return json({post:rows[0]});
@@ -199,3 +195,31 @@ async function contentApi(req,env,ctx) {
  return error('Not found',404);
 }
 
+
+// Bounded isolate-local cache: no persistent credentials or media bytes.
+const contentPreviewCache=new Map();
+function previewCacheLifetime(data){
+ if(!data.available)return 10000;
+ let ttl=120000;
+ try{const u=new URL(data.url),oe=u.searchParams.get('oe');if(oe&&/^[a-f0-9]+$/i.test(oe))ttl=Math.min(ttl,parseInt(oe,16)*1000-Date.now()-30000);}catch{return 0;}
+ return Math.max(0,ttl);
+}
+async function cachedContentPreview(env,u){
+ const where={platform:contentPlatform(u.searchParams.get('platform')),account_id:contentID(u.searchParams.get('account_id')),post_id:contentID(u.searchParams.get('post_id'))};
+ const scope=await producerHash(JSON.stringify([env.GOOGLE_SHEETS_SPREADSHEET_ID||'',env.GOOGLE_CLIENT_ID||'',env.GOOGLE_REFRESH_TOKEN||'',env.META_SYSVAR||'',env.META_GRAPH_VERSION||'']));
+ const key=JSON.stringify([scope,where,u.searchParams.get('refresh')==='1']);
+ const cached=contentPreviewCache.get(key);if(cached&&Date.now()<cached.until)return cached.promise;
+ const entry={until:Date.now()+25000,promise:null};
+ entry.promise=(async()=>{
+  const row=await env.STORE.find('content_posts',where),v=contentPreview(row?.preview_url);
+  let data={url:v,kind:row?.preview_type||'image',available:!!v,expires_warning:'Provider media links can expire.'};
+  if(row&&u.searchParams.get('refresh')==='1'){
+   const fresh=await metaPreview(env,row);
+   data=fresh?.available?{...fresh,expires_warning:'Refreshed from provider; playback depends on CDN availability.'}:{url:'',kind:row.preview_type||'image',available:false,reason:'provider_preview_unavailable'};
+  }
+  entry.until=Date.now()+previewCacheLifetime(data);return data;
+ })().catch(e=>{if(contentPreviewCache.get(key)===entry)contentPreviewCache.delete(key);throw e;});
+ contentPreviewCache.delete(key);contentPreviewCache.set(key,entry);
+ while(contentPreviewCache.size>128)contentPreviewCache.delete(contentPreviewCache.keys().next().value);
+ return entry.promise;
+}
