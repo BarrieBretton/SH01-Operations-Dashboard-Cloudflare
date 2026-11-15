@@ -316,3 +316,55 @@ test('large Meta post IDs survive clickouts export as strings',async()=>{
  const s=setup(),id='9223372036854775807';await s.c.upsertPosts(s.env,[post(id),post('2')]);await s.c.ingestGroups(s.env,[{group_id:'big',platform:'instagram',account_id:'12345',media_type:'IMAGE',members:[id,'2'],algorithm:'fixture',evidence:{}}]);
  const p=await s.c.planCleanup(s.env,{group_id:'big',keep_count:1,keep_strategy:'worst',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});const f=mirrorFixture(s);assert.equal((await s.c.mirrorContentSheets(s.env)).status,'ok');assert.equal(f.tabs.get('clickouts').rows[1][3],id);
 });
+
+const reviewFP=(hash='0123456789abcdef')=>({algorithm:'sh01-social-perceptual',version:1,media_type:'IMAGE',hashes:[hash],gray_stddev:30});
+const reviewGroup=(id,ids,extra={})=>({group_id:id,platform:'instagram',account_id:'12345',media_type:'IMAGE',algorithm:'sh01-social-perceptual',members:ids.map(String),evidence:{method:'complete_link_candidate_cluster',version:1},...extra});
+test('seven reviewed posts plus a later overlapping 29-post scan become one partially reviewed 35-post group',async()=>{
+ const s=setup();for(let i=1;i<=35;i++)await s.c.upsertPosts(s.env,[post(i,{fingerprint:reviewFP()})]);
+ await s.c.ingestGroups(s.env,[reviewGroup('old-seven',[1,2,3,4,5,6,7])]);
+ const old=await s.c.planCleanup(s.env,{group_id:'old-seven',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:old.plan_id,confirmation:old.confirmation});
+ await s.c.ingestGroups(s.env,[reviewGroup('new-29',Array.from({length:29},(_,i)=>i+7))]);
+ const read=()=>s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
+ const before=s.sql.prepare('SELECT COUNT(*) n FROM content_sheet_outbox').get().n;
+ let data=await read(),g=data.rows[0];assert.equal(data.total,1);assert.equal(g.members.length,35);assert.equal(g.review_coverage.reviewed,7);assert.equal(g.review_coverage.unreviewed,28);assert.equal(g.review_coverage.status,'partial');assert.deepEqual(data.index[0].review_coverage,g.review_coverage);
+ assert.equal(g.members.filter(p=>p.cleanup_review.decision==='keep').length,1);assert.equal(g.members.filter(p=>p.cleanup_review.decision==='remove').length,6);assert.equal(g.members.filter(p=>!p.cleanup_review.decision).length,28);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_sheet_outbox').get().n,before,'read reconciliation cannot queue links');assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_duplicate_groups').get().n,2,'immutable group history retained');
+ const detail=await s.c.contentApi({url:'https://d.test/api/content/groups?group_id='+g.group_id,method:'GET'},s.env,{});assert.deepEqual(detail.rows[0].review_coverage,g.review_coverage);
+ // Missing counts on already queued posts do not block a plan for the 29 active posts.
+ s.sql.prepare("UPDATE content_posts SET metrics='{}' WHERE delete_status='awaiting_sheet'").run();
+ const next=await s.c.planCleanup(s.env,{group_id:g.group_id,keep_count:1,keep_strategy:'best',metric:'views'});assert.equal(next.eligible_count,29);assert.equal(next.excluded_previously_queued.length,6);assert.equal(next.remove.length,28);assert.ok(next.remove.every(p=>Number(p.post_id)>=7));assert.equal((await read()).rows[0].review_coverage.reviewed,7,'a preview is not a review');
+ await s.c.queueCleanup(s.env,{plan_id:next.plan_id,confirmation:next.confirmation});data=await read();assert.equal(data.rows[0].review_coverage.reviewed,35);assert.equal(data.rows[0].review_coverage.status,'reviewed');assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,34);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_cleanup_plans WHERE committed=1').get().n,2);
+});
+test('overlap alone cannot merge groups; disjoint compatible fingerprints can, within exact scope and version',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,[post(1,{fingerprint:reviewFP('0000000000000000')}),post(2,{fingerprint:reviewFP()}),post(3,{fingerprint:reviewFP('ffffffffffffffff')})]);
+ await s.c.ingestGroups(s.env,[reviewGroup('ab',[1,2]),reviewGroup('bc',[2,3])]);
+ const read=()=>s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal((await read()).total,2);
+ await s.c.upsertPosts(s.env,Array.from({length:4},(_,i)=>post(i+1,{fingerprint:reviewFP()})));await s.c.ingestGroups(s.env,[reviewGroup('cd',[3,4])]);assert.equal((await read()).rows[0].members.length,4);
+ s.ctx.groups=[reviewGroup('ab',[1,2]),reviewGroup('cd',[3,4],{evidence:{method:'complete_link_candidate_cluster',version:2}})].map(g=>({...g,members:JSON.stringify(g.members),evidence:JSON.stringify(g.evidence)}));s.ctx.posts=s.sql.prepare('SELECT * FROM content_posts').all();assert.equal(vm.runInContext('currentDuplicateGroups(groups,posts).length',s.ctx),2);
+ for(const different of [{platform:'facebook'},{account_id:'other'},{media_type:'VIDEO'},{algorithm:'other'}]){s.ctx.groups[1]={...s.ctx.groups[1],...different,evidence:'{"method":"complete_link_candidate_cluster","version":1}'};assert.equal(vm.runInContext('currentDuplicateGroups(groups,posts).length',s.ctx),2);}
+});
+test('review coverage is identical in index and details and never borrows an unrelated account review',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,Array.from({length:5},(_,i)=>post(i+1)));await s.c.ingestGroups(s.env,[reviewGroup('reviewed',[1,2]),reviewGroup('partial',[2,3,4]),reviewGroup('unreviewed',[4,5])]);
+ const p=await s.c.planCleanup(s.env,{group_id:'reviewed',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});
+ const d=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});for(const g of d.rows)assert.deepEqual(d.index.find(x=>x.group_id===g.group_id).review_coverage,g.review_coverage);
+ assert.equal(d.rows.find(x=>x.group_id==='partial').review_coverage.reviewed,1);assert.equal(d.rows.find(x=>x.group_id==='unreviewed').review_coverage.reviewed,0);
+});
+test('queued fingerprints remain comparison evidence while confirmed deletions and other accounts stay excluded',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,[post(1,{fingerprint:reviewFP()}),post(2,{fingerprint:reviewFP()}),post(3,{fingerprint:reviewFP()}),post(4,{fingerprint:reviewFP()})]);
+ s.sql.prepare("UPDATE content_posts SET delete_status='queued_clickouts' WHERE post_id='1'").run();s.sql.prepare("UPDATE content_posts SET delete_status='awaiting_sheet' WHERE post_id='2'").run();s.sql.prepare("UPDATE content_posts SET delete_status='deleted' WHERE post_id='3'").run();s.sql.prepare("UPDATE content_posts SET account_id='other' WHERE post_id='4'").run();
+ const d=await s.c.contentApi({url:'https://d.test/api/ingest/fingerprints?platform=instagram&account_id=12345',method:'GET'},s.env,{});assert.deepEqual(Array.from(d.fingerprints,p=>p.post_id),['1','2']);
+});
+test('a new verified group member after preview invalidates confirmation without creating queue entries',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,[post(1,{fingerprint:reviewFP()}),post(2,{fingerprint:reviewFP()}),post(3,{fingerprint:reviewFP()})]);await s.c.ingestGroups(s.env,[reviewGroup('ab',[1,2])]);
+ const p=await s.c.planCleanup(s.env,{group_id:'ab',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.ingestGroups(s.env,[reviewGroup('bc',[2,3])]);await assert.rejects(s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation}),/group_or_metrics_changed/);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);
+});
+test('saved video consolidation preserves ordered-frame, duration and low-information guards',()=>{
+ const {ctx}=setup();const frame=hash=>reviewFP(hash),video=(hash='0123456789abcdef',extra={})=>({algorithm:'sh01-social-perceptual',version:1,media_type:'VIDEO',duration:10,sample_positions:[0.1,0.3,0.5,0.7,0.9],frames:Array.from({length:5},()=>frame(hash)),...extra});
+ ctx.a=video();ctx.b=video();assert.equal(vm.runInContext('duplicateFingerprintMatch(a,b,{pairs:0,hashes:0})',ctx),true);
+ for(const b of [video('ffffffffffffffff'),video(undefined,{duration:20}),video(undefined,{sample_positions:[0,0.2,0.4,0.6,0.8]}),video(undefined,{frames:Array.from({length:5},()=>({...frame('0123456789abcdef'),gray_stddev:0}))})]){ctx.b=b;assert.equal(vm.runInContext('duplicateFingerprintMatch(a,b,{pairs:0,hashes:0})',ctx),false);}
+ ctx.b=video();assert.throws(()=>vm.runInContext('duplicateFingerprintMatch(a,b,{pairs:0,hashes:100000})',ctx),/budget/);
+});
+test('consolidation cannot exceed 100 members and a missing post never becomes reviewed by association',async()=>{
+ const s=setup();s.ctx.groups=[reviewGroup('a',Array.from({length:100},(_,i)=>i+1)),reviewGroup('b',[100,101])].map(g=>({...g,members:JSON.stringify(g.members),evidence:JSON.stringify(g.evidence)}));s.ctx.posts=Array.from({length:101},(_,i)=>({...post(i+1),fingerprint:JSON.stringify(reviewFP())}));assert.equal(vm.runInContext('currentDuplicateGroups(groups,posts).length',s.ctx),2);
+ const g={platform:'instagram',account_id:'12345',members:[post(1)],missing_members:['2']},plan={committed:1,plan_id:'p',payload:JSON.stringify({platform:'instagram',account_id:'12345',keep:['1'],remove:[]})};const result=s.c.groupReviewState(g,[plan],[]);assert.equal(result.review_coverage.total,2);assert.equal(result.review_coverage.reviewed,1);assert.equal(result.review_coverage.status,'partial');
+});

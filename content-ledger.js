@@ -130,26 +130,69 @@ async function contentList(env,u){
  for(const key of ['from','to'])if(u.searchParams.get(key)){const v=u.searchParams.get(key);if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!iso(v))throw Error('invalid_date');const date=v+(key==='to'?'T23:59:59.999Z':'T00:00:00.000Z');rows=rows.filter(r=>r.published_at&&(key==='from'?r.published_at>=date:r.published_at<=date));}
  const limit=Math.min(100,Math.max(1,Math.trunc(Number(u.searchParams.get('limit'))||50))),offset=Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0));storeSort(rows,'-published_at','platform','account_id','post_id');return {rows:rows.slice(offset,offset+limit).map(publicPost),has_more:rows.length>offset+limit,next_offset:rows.length>offset+limit?offset+limit:null};
 }
-function currentDuplicateGroups(groups){
- const buckets=new Map(),hidden=new Set();
+// Reconcile historical scanner batches from saved evidence only. No media/API reads.
+function duplicateFingerprintMatch(a,b,work){
+ const image=f=>f?.algorithm==='sh01-social-perceptual'&&f.version===1&&f.media_type==='IMAGE'&&Array.isArray(f.hashes)&&f.hashes.length>0&&f.hashes.length<=19&&f.hashes.every(h=>typeof h==='string'&&/^[a-f0-9]{16}$/.test(h))&&typeof f.gray_stddev==='number'&&Number.isFinite(f.gray_stddev);
+ const valid=f=>image(f)||(f?.algorithm==='sh01-social-perceptual'&&f.version===1&&f.media_type==='VIDEO'&&typeof f.duration==='number'&&f.duration>=0.5&&f.duration<=900&&JSON.stringify(f.sample_positions)==='[0.1,0.3,0.5,0.7,0.9]'&&Array.isArray(f.frames)&&f.frames.length===5&&f.frames.every(image));
+ if(!valid(a)||!valid(b)||a.media_type!==b.media_type)return false;
+ if(typeof a.sha256==='string'&&/^[a-f0-9]{64}$/.test(a.sha256)&&a.sha256===b.sha256)return true;
+ const pop=[0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
+ const distance=(x,y,stop)=>{let best=65;for(const h of x.hashes)for(const k of y.hashes){if(++work.hashes>100000)throw Error('group_comparison_budget');let n=0;for(let i=0;i<16;i++)n+=pop[parseInt(h[i],16)^parseInt(k[i],16)];best=Math.min(best,n);if(best<=stop)return best;}return best;};
+ // The optional ORB fallback stays in the Python scanner. These are its conservative fast paths.
+ if(a.media_type==='IMAGE')return Math.min(a.gray_stddev,b.gray_stddev)>=8&&distance(a,b,4)<=4;
+ if(Math.abs(a.duration-b.duration)>Math.max(1,Math.min(a.duration,b.duration)*0.04))return false;
+ let informative=0,sum=0;for(let i=0;i<5;i++){if(Math.min(a.frames[i].gray_stddev,b.frames[i].gray_stddev)>=8)informative++;const d=distance(a.frames[i],b.frames[i],0);if(d>6)return false;sum+=d;}
+ return informative>=4&&sum<=20;
+}
+function currentDuplicateGroups(groups,posts=[]){
+ const buckets=new Map(),untouched=[],postMap=new Map(posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p])),work={pairs:0,hashes:0};
  for(const g of groups){try{
-  const e=JSON.parse(g.evidence),ids=JSON.parse(g.members);if(g.algorithm!=='sh01-social-perceptual'||e.method!=='complete_link_candidate_cluster'||!Number.isInteger(e.version)||!Array.isArray(ids))continue;
-  const key=JSON.stringify([g.platform,g.account_id,g.media_type,g.algorithm,e.version]);if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push({group:g,members:new Set(ids)});
- }catch{}}
- for(const bucket of buckets.values()){const retained=[];for(const item of bucket.sort((a,b)=>b.members.size-a.members.size)){
-  if(retained.some(other=>other.members.size>item.members.size&&[...item.members].every(id=>other.members.has(id))))hidden.add(item.group);else retained.push(item);
- }}
- return groups.filter(g=>!hidden.has(g));
+  const e=JSON.parse(g.evidence),ids=JSON.parse(g.members);if(g.algorithm!=='sh01-social-perceptual'||e.method!=='complete_link_candidate_cluster'||!Number.isInteger(e.version)||!Array.isArray(ids)||ids.length>100)throw Error('other_group');
+  const key=JSON.stringify([g.platform,g.account_id,g.media_type,g.algorithm,e.version]);if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push({group:g,version:e.version,members:new Set(ids),sources:[g.group_id]});
+ }catch{untouched.push(g);}}
+ const result=[...untouched];
+ for(const bucket of buckets.values()){
+  const memberships=new Map(),fingerprints=new Map(),checked=new Map();
+  for(const [i,item] of bucket.entries())for(const id of item.members){if(!memberships.has(id))memberships.set(id,new Set());memberships.get(id).add(i);}
+  const fp=(item,id)=>{if(!fingerprints.has(id)){let f=null;try{f=JSON.parse(postMap.get(JSON.stringify([item.group.platform,item.group.account_id,id]))?.fingerprint||'null');}catch{}fingerprints.set(id,f);}return fingerprints.get(id);};
+  const pair=(item,a,b)=>{
+   if(a===b||[...(memberships.get(a)||[])].some(i=>memberships.get(b)?.has(i)))return true;
+   const key=JSON.stringify([a,b].sort());if(checked.has(key))return checked.get(key);
+   if(item.version!==1||++work.pairs>2000||work.hashes>100000)return false;
+   let match=false;try{const x=fp(item,a),y=fp(item,b);match=x?.media_type===item.group.media_type&&y?.media_type===item.group.media_type&&duplicateFingerprintMatch(x,y,work);}catch{}
+   checked.set(key,match);return match;
+  };
+  const retained=[];
+  for(const item of bucket.sort((a,b)=>b.members.size-a.members.size||a.group.group_id.localeCompare(b.group.group_id))){
+   let target=null;
+   for(const other of retained){const union=new Set([...other.members,...item.members]);if(union.size>100)continue;
+    // Every cross-pair needs evidence: overlap alone is never enough to merge.
+    if([...other.members].every(a=>[...item.members].every(b=>pair(item,a,b)))){target=other;break;}
+   }
+   if(target){for(const id of item.members)target.members.add(id);target.sources.push(...item.sources);if(item.group.updated_at>target.updated_at)target.updated_at=item.group.updated_at;}
+   else retained.push({...item,updated_at:item.group.updated_at});
+  }
+  for(const item of retained){const ids=[...item.members].sort(),original=JSON.parse(item.group.members);result.push(ids.length===original.length?item.group:{...item.group,members:JSON.stringify(ids),updated_at:item.updated_at,evidence:JSON.stringify({method:'verified_group_consolidation',version:item.version,source_group_ids:item.sources.sort(),pair_count:ids.length*(ids.length-1)/2,verification:'Each pair supported by a stored complete-link group or compatible saved fingerprints.'})});}
+ }
+ return result;
+}
+function reviewedPostKeys(plans,queue){
+ const key=(p,a,id)=>JSON.stringify([p,a,id]),reviewed=new Set(queue.map(q=>key(q.platform,q.account_id,q.post_id)));
+ for(const plan of plans){if(!Number(plan.committed))continue;try{const d=JSON.parse(plan.payload);for(const x of [...(d.keep||[]),...(d.remove||[])])reviewed.add(key(d.platform,d.account_id,typeof x==='object'?x.post_id:x));}catch{}}
+ return reviewed;
+}
+function duplicateReviewCoverage(group,ids,reviewed){
+ const total=new Set(ids).size,count=[...new Set(ids)].filter(id=>reviewed.has(JSON.stringify([group.platform,group.account_id,id]))).length;
+ return {total,reviewed:count,unreviewed:total-count,status:!count?'unreviewed':count===total?'reviewed':'partial'};
 }
 
 // The picker index is complete; only preview-rich rows are limited.
 function duplicateGroupIndex(env,tables,groups,coverage){
- const key=(p,a,id)=>JSON.stringify([p,a,id]),known=new Set(tables.content_posts.map(p=>key(p.platform,p.account_id,p.post_id))),reviewed=new Set(tables.content_deletion_queue.map(q=>key(q.platform,q.account_id,q.post_id)));
- for(const plan of tables.content_cleanup_plans){if(!Number(plan.committed))continue;try{const d=JSON.parse(plan.payload);for(const item of [...(d.keep||[]),...(d.remove||[])])reviewed.add(key(d.platform,d.account_id,typeof item==='object'?item.post_id:item));}catch{}}
+ const key=(p,a,id)=>JSON.stringify([p,a,id]),known=new Set(tables.content_posts.map(p=>key(p.platform,p.account_id,p.post_id))),reviewed=reviewedPostKeys(tables.content_cleanup_plans,tables.content_deletion_queue);
  const names=new Map();
  return groups.map(g=>{const account=JSON.stringify([g.platform,g.account_id]);if(!names.has(account))names.set(account,{...contentAccountName(g,tables.meta_assets,tables.content_posts),scan_coverage:coverage.find(c=>c.platform===g.platform&&c.account_id===g.account_id)||null,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,g.platform,g.account_id):null});
   const ids=JSON.parse(g.members),present=ids.filter(id=>known.has(key(g.platform,g.account_id,id)));
-  return {group_id:g.group_id,platform:g.platform,account_id:g.account_id,media_type:g.media_type,updated_at:g.updated_at,member_count:present.length,missing_member_count:ids.length-present.length,has_confirmed_history:present.some(id=>reviewed.has(key(g.platform,g.account_id,id))),details_loaded:false,...names.get(account)};
+  return {group_id:g.group_id,platform:g.platform,account_id:g.account_id,media_type:g.media_type,updated_at:g.updated_at,member_count:present.length,missing_member_count:ids.length-present.length,has_confirmed_history:present.some(id=>reviewed.has(key(g.platform,g.account_id,id))),review_coverage:duplicateReviewCoverage(g,ids,reviewed),details_loaded:false,...names.get(account)};
  });
 }
 function groupFromTables(groups,posts,id){const g=groups.find(x=>x.group_id===id);if(!g)throw Error('group_not_found');const ids=JSON.parse(g.members),rows=posts.filter(r=>r.platform===g.platform&&r.account_id===g.account_id&&ids.includes(r.post_id));storeSort(rows,'post_id');return {...g,members:rows.map(publicPost),missing_members:ids.filter(id=>!rows.some(r=>r.post_id===id)),evidence:JSON.parse(g.evidence),review_status:'candidate_requires_confirmation'};}
@@ -177,9 +220,14 @@ function groupReviewState(group,plans,queue){
   if(decision||q)prior=true;
   return {...post,cleanup_review:{...decision,queue_status:q?.status||null,queued_at:q?.created_at||null,removal_scheduled_at:null,schedule_status:'not_reported'}};
  });
- return {...group,members,has_confirmed_history:prior};
+ return {...group,members,has_confirmed_history:prior,review_coverage:duplicateReviewCoverage(group,[...members.map(p=>p.post_id),...(group.missing_members||[])],reviewedPostKeys(plans,queue))};
 }
-async function duplicateGroup(env,id){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts']);return groupFromTables(tables.content_duplicate_groups,tables.content_posts,contentID(id));}
+function cleanupGroupFromTables(tables,id){
+ const group=groupFromTables(currentDuplicateGroups(tables.content_duplicate_groups,tables.content_posts),tables.content_posts,id);
+ const queued=new Set(tables.content_deletion_queue.filter(q=>q.platform===group.platform&&q.account_id===group.account_id).map(q=>q.post_id));
+ return {...group,excluded_from_plan:group.members.filter(p=>p.delete_status!=='published'||queued.has(p.post_id)).map(p=>p.post_id).sort()};
+}
+async function duplicateGroup(env,id){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_deletion_queue']);return cleanupGroupFromTables(tables,contentID(id));}
 async function ingestGroups(env,groups){
  if(!Array.isArray(groups)||groups.length>10)throw Error('maximum_10_groups');
  await env.STORE.transact(['content_duplicate_groups','content_posts'],tx=>{for(const x of groups){const id=contentID(x.group_id),platform=contentPlatform(x.platform),account=contentID(x.account_id),ids=[...new Set((x.members||[]).map(contentID))];if(ids.length<2||ids.length>100||!['IMAGE','VIDEO'].includes(x.media_type)||JSON.stringify(x.evidence||{}).length>4000)throw Error('invalid_duplicate_group');const rows=tx.rows('content_posts').filter(r=>r.platform===platform&&r.account_id===account&&ids.includes(r.post_id));if(rows.length!==ids.length||rows.some(r=>(['VIDEO','REELS'].includes(r.media_type)?'VIDEO':r.media_type==='POST'&&r.fingerprint?JSON.parse(r.fingerprint).media_type:r.media_type)!==x.media_type))throw Error('mixed_or_missing_group_members');tx.put('content_duplicate_groups',{group_id:id,platform,account_id:account,media_type:x.media_type,algorithm:clean(x.algorithm,100),confidence:'candidate',members:JSON.stringify(ids.sort()),evidence:JSON.stringify(x.evidence||{}),updated_at:contentNow()});}});return {accepted:groups.length};
@@ -209,9 +257,11 @@ function rankDuplicateMembers(members,k,strategy,metric,requestedWeights) {
 }
 async function planCleanup(env,b) {
  const group=await duplicateGroup(env,b.group_id);if(group.missing_members.length)throw Error('missing_group_members');
- const ranked=rankDuplicateMembers(group.members,b.keep_count,b.keep_strategy,b.metric,b.weights);
+ const eligible=group.members.filter(p=>!group.excluded_from_plan.includes(p.post_id));
+ if(eligible.length<2&&group.excluded_from_plan.length)throw Error('already_queued_member');
+ const ranked=rankDuplicateMembers(eligible,b.keep_count,b.keep_strategy,b.metric,b.weights);
  const source_digest=await producerHash(JSON.stringify(group)),plan_id=crypto.randomUUID(),expires_at=new Date(Date.now()+600000).toISOString();
- const payload={...ranked,group_id:group.group_id,platform:group.platform,account_id:group.account_id,keep_count:b.keep_count,keep_strategy:b.keep_strategy,metric:b.metric,ranking_basis:'latest_observed_lifetime_total; publication_age_not_adjusted',confirmation:'QUEUE '+ranked.remove.length+' LINKS'};
+ const payload={...ranked,eligible_count:eligible.length,excluded_previously_queued:group.excluded_from_plan,group_id:group.group_id,platform:group.platform,account_id:group.account_id,keep_count:b.keep_count,keep_strategy:b.keep_strategy,metric:b.metric,ranking_basis:'latest_observed_lifetime_total; publication_age_not_adjusted',confirmation:'QUEUE '+ranked.remove.length+' LINKS'};
  await env.STORE.put('content_cleanup_plans',{plan_id,group_id:group.group_id,payload:JSON.stringify(payload),source_digest,expires_at,committed:0});
  return {plan_id,...payload,expires_at,warning:'Queueing clickouts links can cause your existing deletion workflow to delete these posts. Confirm the candidate group and keep policy.'};
 }
@@ -219,7 +269,7 @@ async function queueCleanup(env,b){
  if(env.GOOGLE_SHEETS_WRITE_ENABLED!=='1')throw Error('sheet_writes_disabled');
  return env.STORE.transact(['content_cleanup_plans','content_duplicate_groups','content_posts','content_deletion_queue','content_sheet_outbox','content_collect_state'],async tx=>{
   const p=tx.find('content_cleanup_plans',{plan_id:contentID(b.plan_id)});if(!p||p.committed||Date.parse(p.expires_at)<Date.now())throw Error('plan_missing_used_or_expired');const data=JSON.parse(p.payload);if(b.confirmation!==data.confirmation)throw Error('confirmation_mismatch');
-  const group=groupFromTables(tx.rows('content_duplicate_groups'),tx.rows('content_posts'),p.group_id);if(await producerHash(JSON.stringify(group))!==p.source_digest)throw Error('group_or_metrics_changed_preview_again');
+  const group=cleanupGroupFromTables({content_duplicate_groups:tx.rows('content_duplicate_groups'),content_posts:tx.rows('content_posts'),content_deletion_queue:tx.rows('content_deletion_queue')},p.group_id);if(await producerHash(JSON.stringify(group))!==p.source_digest)throw Error('group_or_metrics_changed_preview_again');
   const at=contentNow();for(const x of data.remove){const w={platform:data.platform,account_id:data.account_id,post_id:x.post_id};if(tx.find('content_deletion_queue',w))throw Error('post_already_queued');const request_id=crypto.randomUUID(),rec={request_id,...w,permalink:x.permalink};tx.put('content_deletion_queue',{...rec,status:'awaiting_sheet',reason:'confirmed_duplicate_plan',created_at:at,updated_at:at});tx.put('content_sheet_outbox',{record_key:'delete:'+request_id,kind:'clickouts',payload:JSON.stringify(rec),status:'pending',error_code:null,updated_at:at});Object.assign(tx.find('content_posts',w),{delete_status:'awaiting_sheet'});}
   p.payload=JSON.stringify({...data,confirmed_at:at});p.committed=1;tx.put('content_collect_state',{id:'request:sheet_mirror',payload:JSON.stringify({requested_at:at,nonce:crypto.randomUUID()})});return {confirmed_at:at,queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
  });
@@ -325,7 +375,7 @@ async function contentApi(req,env,ctx) {
  if(p==='/api/ingest/posts'&&req.method==='POST')return json(await upsertPosts(env,(await body(req)).posts));
  if(p==='/api/ingest/duplicate-groups'&&req.method==='POST')return json(await ingestGroups(env,(await body(req)).groups));
  if(p==='/api/ingest/fingerprints'&&req.method==='GET'){
-  const rows=storeSort((await env.STORE.rows('content_posts')).filter(r=>r.platform===contentPlatform(u.searchParams.get('platform'))&&r.account_id===contentID(u.searchParams.get('account_id'))&&r.fingerprint&&r.delete_status==='published'),'post_id').slice(Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0)),Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0))+101).map(({post_id,fingerprint})=>({post_id,fingerprint}));
+  const rows=storeSort((await env.STORE.rows('content_posts')).filter(r=>r.platform===contentPlatform(u.searchParams.get('platform'))&&r.account_id===contentID(u.searchParams.get('account_id'))&&r.fingerprint&&['published','awaiting_sheet','queued_clickouts','failed'].includes(r.delete_status)),'post_id').slice(Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0)),Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0))+101).map(({post_id,fingerprint})=>({post_id,fingerprint}));
   return json({fingerprints:rows.slice(0,100).map(r=>({...r,fingerprint:JSON.parse(r.fingerprint)})),has_more:rows.length>100});
  }
  if(p==='/api/content/sheets/setup'&&req.method==='POST')return json(await setupContentSheet(env));
@@ -348,7 +398,7 @@ async function contentApi(req,env,ctx) {
  if(p==='/api/content/groups'&&req.method==='GET'){
   const requested=u.searchParams.get('group_id');if(requested!==null)contentID(requested);
   const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content','meta_capabilities']);
-  const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[],current=storeSort(currentDuplicateGroups(tables.content_duplicate_groups),'-updated_at','group_id');
+  const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[],current=storeSort(currentDuplicateGroups(tables.content_duplicate_groups,tables.content_posts),'-updated_at','group_id');
   const groups=requested!==null?current.filter(g=>g.group_id===requested):current.slice(0,20);
   if(requested!==null&&!groups.length)throw Error('group_not_found_refresh_groups');
   const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{

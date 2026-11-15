@@ -90,7 +90,7 @@ async function metaQueueGroupMetrics(env,input){
  if(requested.some(m=>!CONTENT_METRICS.has(m)))throw Error('unsupported_ranking_metric');
  let required;
  await env.STORE.transact(['content_duplicate_groups','content_posts','meta_content','content_collect_state'],tx=>{
-  const group=groupFromTables(currentDuplicateGroups(tx.rows('content_duplicate_groups')),tx.rows('content_posts'),id);
+  const group=groupFromTables(currentDuplicateGroups(tx.rows('content_duplicate_groups'),tx.rows('content_posts')),tx.rows('content_posts'),id);
   if(!['facebook','instagram'].includes(group.platform))throw Error('metrics_platform_unavailable');
   required=[...new Set([...requested,'views','shares',...(group.platform==='instagram'?['reach']:[])])];
   const media=tx.rows('meta_content'),rows=group.members.filter(p=>p.delete_status==='published'&&media.some(m=>m.id===p.post_id&&m.platform===p.platform&&m.asset_id===p.account_id));
