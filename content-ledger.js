@@ -56,6 +56,35 @@ function contentPoster(row,media){
  if(row.preview_type==='video'&&original&&new URL(poster).pathname===new URL(original).pathname)return '';
  return poster;
 }
+// Metric availability is separate from media loading. Never infer zero from an absent field.
+const contentMetricContexts=new WeakMap();
+function contentMetricContext(tables){
+ let context=contentMetricContexts.get(tables);if(context)return context;
+ const media=new Map((tables.meta_content||[]).map(m=>[JSON.stringify([m.platform,m.asset_id,m.id]),m])),caps=new Map(),states=new Map((tables.content_collect_state||[]).map(s=>[s.id,s]));
+ for(const cap of tables.meta_capabilities||[]){const key=JSON.stringify([cap.asset_id,cap.kind]);if(!caps.has(key))caps.set(key,[]);caps.get(key).push(cap);}
+ context={media,caps,states};contentMetricContexts.set(tables,context);return context;
+}
+function contentMetricEvidence(row,tables){
+ const metrics=typeof row.metrics==='string'?JSON.parse(row.metrics||'{}'):row.metrics||{};
+ const context=contentMetricContext(tables),media=context.media.get(JSON.stringify([row.platform,row.account_id,row.post_id]));
+ const caps=media?context.caps.get(JSON.stringify([row.post_id,media.kind]))||[]:[];
+ const postState=media?JSON.parse(context.states.get('meta:post:'+row.post_id)?.payload||'{}'):{};
+ const reasonState=reason=>/credential_rejected/.test(reason)?'connection_required':/permission_denied/.test(reason)?'permission_required':/metric_unsupported/.test(reason)?'unsupported':/rate_limited|budget/.test(reason)?'deferred':/no_numeric|empty_or_suppressed|not_returned/.test(reason)?'not_returned':'failed';
+ const result={};
+ for(const metric of ['views','likes','comments','shares']){
+  const key=row.platform==='facebook'&&metric==='views'?'post_media_view':metric;
+  const cap=caps.filter(c=>c.metric===key||(row.platform==='facebook'&&metric!=='views'&&c.metric==='engagement_fields')).sort((a,b)=>String(b.checked_at||'').localeCompare(String(a.checked_at||''))||Number(a.metric==='engagement_fields')-Number(b.metric==='engagement_fields'))[0];
+  const failure=postState.error&&(!cap||String(postState.checked_at)>String(cap.checked_at))?{status:reasonState(postState.error),checked_at:postState.checked_at||null}:cap?.status==='unavailable'?{status:reasonState(cap.reason||''),checked_at:cap.checked_at||null}:null;
+  const numeric=typeof metrics[metric]==='number'&&Number.isFinite(metrics[metric])&&metrics[metric]>=0;
+  result[metric]=numeric?{status:'available',checked_at:cap?.status==='available'?cap.checked_at||null:null,...(failure?{refresh_status:failure.status,refresh_checked_at:failure.checked_at}:{})}:failure||{status:cap?.status==='available'?'not_returned':'not_collected',checked_at:cap?.checked_at||null};
+ }
+ return result;
+}
+function contentMetricRefreshSummary(group,tables){
+ const members=new Set((group.members||[]).map(p=>typeof p==='string'?p:p.post_id));
+ const requests=(tables.content_collect_state||[]).filter(r=>r.id.startsWith('meta:refresh:')).map(r=>JSON.parse(r.payload||'{}')).filter(r=>r.platform===group.platform&&r.account_id===group.account_id&&members.has(r.post_id));
+ return {pending:requests.filter(r=>r.status==='queued').length,checked:requests.filter(r=>r.status==='checked').length,failed:requests.filter(r=>r.status==='failed').length,last_attempt:requests.map(r=>r.checked_at).filter(Boolean).sort().at(-1)||null};
+}
 function publicPost(r) {return {...r,metrics:JSON.parse(r.metrics||'{}'),fingerprint:undefined,preview_url:contentPreview(r.preview_url)};}
 async function contentReady(env){return !!env.STORE;}
 function mergePostRecords(tx,records,at){
@@ -96,7 +125,7 @@ function contentAccountName(row,assets=[],posts=[]){
  return {account_name:'',account_name_source:'unavailable'};
 }
 async function contentList(env,u){
- const {tables}=await env.STORE.snapshot(['content_posts','meta_assets','meta_content']);let rows=tables.content_posts.map(row=>({...row,...contentAccountName(row,tables.meta_assets),poster_url:contentPoster(row,tables.meta_content)}));for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
+ const {tables}=await env.STORE.snapshot(['content_posts','meta_assets','meta_content','meta_capabilities','content_collect_state']);let rows=tables.content_posts.map(row=>({...row,...contentAccountName(row,tables.meta_assets),poster_url:contentPoster(row,tables.meta_content),metric_status:contentMetricEvidence(row,tables)}));for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
  const q=(u.searchParams.get('q')||'').slice(0,100).toLowerCase();if(q)rows=rows.filter(r=>String(r.caption).toLowerCase().includes(q)||String(r.account_name||r.account_handle).toLowerCase().includes(q)||r.post_id.toLowerCase()===q);
  for(const key of ['from','to'])if(u.searchParams.get(key)){const v=u.searchParams.get(key);if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!iso(v))throw Error('invalid_date');const date=v+(key==='to'?'T23:59:59.999Z':'T00:00:00.000Z');rows=rows.filter(r=>r.published_at&&(key==='from'?r.published_at>=date:r.published_at<=date));}
  const limit=Math.min(100,Math.max(1,Math.trunc(Number(u.searchParams.get('limit'))||50))),offset=Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0));storeSort(rows,'-published_at','platform','account_id','post_id');return {rows:rows.slice(offset,offset+limit).map(publicPost),has_more:rows.length>offset+limit,next_offset:rows.length>offset+limit?offset+limit:null};
@@ -113,6 +142,16 @@ function currentDuplicateGroups(groups){
  return groups.filter(g=>!hidden.has(g));
 }
 
+// The picker index is complete; only preview-rich rows are limited.
+function duplicateGroupIndex(env,tables,groups,coverage){
+ const key=(p,a,id)=>JSON.stringify([p,a,id]),known=new Set(tables.content_posts.map(p=>key(p.platform,p.account_id,p.post_id))),reviewed=new Set(tables.content_deletion_queue.map(q=>key(q.platform,q.account_id,q.post_id)));
+ for(const plan of tables.content_cleanup_plans){if(!Number(plan.committed))continue;try{const d=JSON.parse(plan.payload);for(const item of [...(d.keep||[]),...(d.remove||[])])reviewed.add(key(d.platform,d.account_id,typeof item==='object'?item.post_id:item));}catch{}}
+ const names=new Map();
+ return groups.map(g=>{const account=JSON.stringify([g.platform,g.account_id]);if(!names.has(account))names.set(account,{...contentAccountName(g,tables.meta_assets,tables.content_posts),scan_coverage:coverage.find(c=>c.platform===g.platform&&c.account_id===g.account_id)||null,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,g.platform,g.account_id):null});
+  const ids=JSON.parse(g.members),present=ids.filter(id=>known.has(key(g.platform,g.account_id,id)));
+  return {group_id:g.group_id,platform:g.platform,account_id:g.account_id,media_type:g.media_type,updated_at:g.updated_at,member_count:present.length,missing_member_count:ids.length-present.length,has_confirmed_history:present.some(id=>reviewed.has(key(g.platform,g.account_id,id))),details_loaded:false,...names.get(account)};
+ });
+}
 function groupFromTables(groups,posts,id){const g=groups.find(x=>x.group_id===id);if(!g)throw Error('group_not_found');const ids=JSON.parse(g.members),rows=posts.filter(r=>r.platform===g.platform&&r.account_id===g.account_id&&ids.includes(r.post_id));storeSort(rows,'post_id');return {...g,members:rows.map(publicPost),missing_members:ids.filter(id=>!rows.some(r=>r.post_id===id)),evidence:JSON.parse(g.evidence),review_status:'candidate_requires_confirmation'};}
 // Review annotations are read-only history. They never participate in plan digests.
 function groupReviewState(group,plans,queue){
@@ -255,18 +294,31 @@ async function contentApi(req,env,ctx) {
  if(p==='/api/content/plan'&&req.method==='POST')return json(await planCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='POST')return json(await queueCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='GET'){
-  const {tables}=await env.STORE.snapshot(['content_deletion_queue','content_posts','meta_assets','meta_content','content_jobs','content_sheet_outbox','sheet_sync_state','sheet_live_producers']);
+  const {tables}=await env.STORE.snapshot(['content_deletion_queue','content_posts','meta_assets','meta_content','content_jobs','content_sheet_outbox','sheet_sync_state','sheet_live_producers','meta_capabilities','content_collect_state']);
   const posts=new Map(tables.content_posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p]));
   const rows=storeSort(tables.content_deletion_queue,'-created_at').slice(0,501).map(q=>{
    const p=posts.get(JSON.stringify([q.platform,q.account_id,q.post_id])),verified=!!p&&p.permalink===q.permalink;
-   return {...(verified?{...publicPost(p),...contentAccountName(p,tables.meta_assets),poster_url:contentPoster(p,tables.meta_content)}:{}),...q,preview_available:verified&&p.delete_status!=='deleted',preview_unavailable_reason:!verified?'Post identity has not been verified. Open the original link.':p.delete_status==='deleted'?'Post is recorded as deleted.':''};
+   return {...(verified?{...publicPost(p),...contentAccountName(p,tables.meta_assets),poster_url:contentPoster(p,tables.meta_content),metric_status:contentMetricEvidence(p,tables)}:{}),...q,preview_available:verified&&p.delete_status!=='deleted',preview_unavailable_reason:!verified?'Post identity has not been verified. Open the original link.':p.delete_status==='deleted'?'Post is recorded as deleted.':''};
   });
   const state=tables.sheet_sync_state.find(s=>s.id===1)||{},metaRow=tables.sheet_live_producers.find(s=>s.version===state.active_version&&s.producer_id==='__producer_source_evidence_v2__'),sheet=metaRow?JSON.parse(metaRow.payload)?.clickouts:null;
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
   const visible=rows.slice(0,500);const decorated=typeof extrasDecorate==='function'?await extrasDecorate(env,visible):visible;return json({rows:decorated,limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env,tables)});
  }
+ if(p==='/api/content/metrics/refresh'&&req.method==='POST')return json(await metaQueueGroupMetrics(env,await body(req)),202);
  if(p==='/api/content/scan'&&req.method==='POST')return json(await autoScanPrioritize(env,await body(req)),202);
- if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content']);const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[];const groups=storeSort(currentDuplicateGroups(tables.content_duplicate_groups),'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{const name=contentAccountName(group,tables.meta_assets,tables.content_posts);const scan_coverage=scanCoverage.find(a=>a.platform===group.platform&&a.account_id===group.account_id)||null;return {...group,...name,scan_coverage,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,group.platform,group.account_id):null,members:group.members.map(row=>({...row,...name,poster_url:contentPoster(row,tables.meta_content)}))};});if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported',scan_progress:contentScanProgress(tables,scanCoverage)});}
+ if(p==='/api/content/groups'&&req.method==='GET'){
+  const requested=u.searchParams.get('group_id');if(requested!==null)contentID(requested);
+  const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content','meta_capabilities']);
+  const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[],current=storeSort(currentDuplicateGroups(tables.content_duplicate_groups),'-updated_at','group_id');
+  const groups=requested!==null?current.filter(g=>g.group_id===requested):current.slice(0,20);
+  if(requested!==null&&!groups.length)throw Error('group_not_found_refresh_groups');
+  const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{
+   const name=contentAccountName(group,tables.meta_assets,tables.content_posts),scan_coverage=scanCoverage.find(a=>a.platform===group.platform&&a.account_id===group.account_id)||null;
+   return {...group,...name,details_loaded:true,metric_refresh:contentMetricRefreshSummary(group,tables),member_count:group.members.length,scan_coverage,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,group.platform,group.account_id):null,members:group.members.map(row=>({...row,...name,poster_url:contentPoster(row,tables.meta_content),metric_status:contentMetricEvidence(row,tables)}))};
+  });
+  if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);
+  return json({rows,limit:requested!==null?1:20,total:current.length,...(requested===null?{index:duplicateGroupIndex(env,tables,current,scanCoverage),index_complete:true,scan_progress:contentScanProgress(tables,scanCoverage)}:{}),scope:'same_platform_and_account',removal_schedule:'not_reported'});
+ }
  if(p==='/api/content'&&req.method==='GET'){const data=await contentList(env,u);if(typeof extrasDecorate==='function')data.rows=await extrasDecorate(env,data.rows);return json(data);}
  if(p==='/api/content/series'&&req.method==='GET'){
   const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id')),id=contentID(u.searchParams.get('post_id')),metric=u.searchParams.get('metric');if(!CONTENT_METRICS.has(metric))throw Error('unsupported_metric');

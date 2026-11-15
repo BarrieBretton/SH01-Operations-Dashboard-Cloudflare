@@ -586,3 +586,95 @@ lock cleanup and proposed-versus-confirmed decisions, alongside the queue/poster
 checks. Parsed generated HTML has 188 unique IDs. Real-browser visual/accessibility
 and playback checks remain to be performed after deployment; Chromium launch in
 this environment was blocked during the earlier preview validation.
+
+## Complete duplicate group picker — 16 November 2026
+
+Operator-observed: after new groups appeared for other accounts, Aand Cut no
+longer appeared in the candidate picker. Source-confirmed: GET /api/content/groups
+returned only the 20 newest groups globally, so one account's newer groups could
+push another account entirely out of the response. This was a listing limit;
+the screenshot does not prove that stored groups or provider posts were deleted.
+GitHub master aeefb709 contains the progress-bar picker in both editable and built
+sources, while the supplied screenshot appears to show the older native select.
+The active Cloudflare version still requires operator verification.
+
+The groups response now includes a complete lightweight index of current groups,
+plus the existing bounded set of 20 preview-rich rows. The index contains exact
+platform/account/group identity, readable name, member counts, saved review
+history and scan coverage. Its calculation uses the same storage snapshot and
+adds no Sheets read. The index is not truncated by update recency. Existing
+strict-subset suppression within the same account/platform/algorithm remains.
+
+The browser uses the full index for the picker. Selecting a group outside the
+initial preview set loads only that group's details with GET /api/content/groups
+and group_id. This is an authenticated read using one snapshot. It performs no
+scan, queue write or deletion. Successfully loaded details are reused during that
+view; refresh obtains current evidence. Selection is preserved by group identity,
+not its list position. No increase to full preview payload limits is required.
+
+A local loading indicator is shown while group members arrive, and planning is
+blocked until details are validated. Concurrent identical loads coalesce. Old
+selection, navigation, refresh and lock responses cannot repaint another account.
+Failures retain the account in the picker with local retry feedback; rate limits
+honor the existing cooldown instead of immediately reissuing the same request.
+Missing/superseded groups explicitly request a refresh. Legacy responses without
+a complete index are labelled incomplete rather than presented as all groups.
+
+Local validation: 243 JavaScript tests and four Python completion checks passed;
+the generated HTML has 191 unique IDs. Regression fixtures add 24 newer groups
+while an older Aand Cut group remains selectable and can load exact member data.
+Checks also cover one-snapshot listing, scoped confirmed history, loading/plan
+gates, read coalescing, response races, wrong-account responses and cooldowns.
+No production records or deployment were changed during validation. Live
+Cloudflare delivery, browser appearance and actual stored Aand Cut membership
+remain operator checks. The public HTML marker is complete-index-v1.
+
+
+## Metric collection evidence and group refresh — 16 November 2026
+
+Operator-observed: Facebook duplicate cards display images while every count is
+Unknown. This screenshot does not establish the specific provider failure.
+Source-confirmed: preview delivery is independent of metric collection; cards
+previously received only numeric values, although the collector saved capability
+failures. A combined Facebook likes/comments/shares field rejection discarded all
+three counts. An absent value must not be converted to zero or to a loading state.
+
+Library, duplicate and verified queue post responses now carry safe per-metric
+availability from the same snapshot as their posts. Joins require exact platform,
+account, post and media kind; an ephemeral index avoids repeated full capability
+scans. No additional per-card Sheets request is made. Cards distinguish Not
+collected, Not provided, Not supported, Access needed, Reconnect Meta, Check delayed
+and Check failed. Numeric zero remains zero, older numeric values survive refresh
+failures, and explanatory details include the last check where recorded. No raw
+provider messages or tokens are returned. Weighted scores explain which required
+counts are absent; existing missing-metric and stale-plan protections remain.
+
+Refresh group metrics queues an explicit authenticated request for the selected
+current group's published Meta-linked posts. It reuses content_collect_state and
+the existing meta_collect lease, schema, credential and cron. No new environment
+variable is needed. Identical queued requests coalesce; completed requests have a
+15-minute request cooldown. Two posts are checked per targeted batch, alternating
+with ordinary account collection. Remaining requests participate in the normal
+scheduler instead of repeatedly taking manual priority away from other jobs.
+Queued counts are labelled awaiting a check, not actively loading. Refresh groups
+reads completion and per-card evidence; no new browser polling loop was added.
+An actual enqueue HTTP request has its own local spinner and feedback, with
+selection/session guards. This action creates no cleanup plan or deletion request.
+
+Facebook combined fields fall back individually only for a field/parameter
+rejection. Permission, credential and rate failures do not trigger that fan-out.
+Fallback stays within the existing twelve-call/eighty-second budget. Missing
+shares and reaction breakdowns are not invented as zero or as likes. Collection
+prioritizes displayed views/shares insight candidates within existing probe
+cooldowns. A provider rate limit stops subsequent calls in that batch and saves
+its cooldown; the scheduler also honors it for explicitly queued work. Permission
+or unsupported-metric evidence cannot be repaired merely by reloading images.
+
+Validation: 257 JavaScript tests and four Python completion checks passed locally.
+New coverage includes exact metric identity, safe reasons, missing versus zero,
+retained numeric history, bounded field fallback, durable/coalesced refresh work,
+normal scheduler participation, persisted cooldown, local loading, and late
+selection/session responses. Existing group index, media, cleanup and storage
+checks still pass. No authenticated live Meta counts were fetched during this
+work; the exact reason for the operator's missing counts remains unverified until
+the new response is deployed and read. Public HTML marker: metric-evidence-v1.

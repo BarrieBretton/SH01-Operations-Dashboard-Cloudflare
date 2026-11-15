@@ -110,3 +110,5 @@ button.is-loading::before{margin-right:8px}button.is-loading{cursor:progress}
 .group-option-name{display:block;font-size:13px;line-height:1.5;font-weight:600;overflow-wrap:anywhere}.group-option-coverage{display:block;font-size:11px;color:var(--muted);margin-top:5px}
 @media(max-width:760px){.scan-progress-grid{grid-template-columns:1fr}.scan-progress-card{padding:16px}.group-picker{min-width:0;width:100%;flex-basis:100%}.scan-percent{font-size:30px}}
 @media(forced-colors:active){.scan-meter{border:1px solid CanvasText}.scan-meter>span{background:Highlight}.group-picker-options [aria-selected=true]{border:2px solid Highlight}}
+
+.metric-unavailable{font-size:12px;color:var(--muted)}.metric-refresh-warning{display:block;font-size:10px;color:var(--warn)}.metric-explanation{font-size:12px;margin:8px 4px}.metric-explanation p,.metric-explanation li{color:var(--muted);line-height:1.5}.metric-explanation summary{cursor:pointer}.group-metric-controls{margin:12px 0}.group-metric-controls p{max-width:75ch}

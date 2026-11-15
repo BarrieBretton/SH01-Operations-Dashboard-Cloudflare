@@ -34,7 +34,7 @@ function metaObservation(entry){
 }
 function metaCredential(raw){if(!raw||typeof raw!=='string')throw Error('META_SYSVAR missing');let v=raw.trim();if(v.startsWith('{')){let obj;try{obj=JSON.parse(v)}catch{throw Error('META_SYSVAR structure invalid')}v=obj.access_token||obj.token||obj.page_access_token||obj.user_access_token;if(typeof v!=='string')throw Error('META_SYSVAR has no supported access token field')}if(!/^[A-Za-z0-9._-]{20,}$/.test(v))throw Error('META_SYSVAR credential format unsupported');return v}
 function metaRetryDelay(attempt,header){const seconds=Number(header),floor=header?(Number.isFinite(seconds)?Math.max(0,seconds*1000):Math.max(0,Date.parse(header)-Date.now())||0):0;return Math.max(floor,800*2**attempt)+Math.floor(Math.random()*500);}
-async function graph(path,token,params={},version=META_VERSION,budget=null){if(!/^v[0-9]+\.0$/.test(version))throw Error('invalid_graph_version');let u=new URL('https://graph.facebook.com/'+version+'/'+path.replace(/^\//,''));for(let [k,v] of Object.entries(params))u.searchParams.set(k,String(v));let attempts=0;while(true){if(budget&&(budget.calls>=12||Date.now()>budget.deadline))throw Error("meta_request_budget");if(budget)budget.calls++;let res;try{res=await fetch(u.toString(),{redirect:'manual',headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)})}catch{throw Error('network_unavailable')}if(res.status>=300&&res.status<400)throw Error('graph_redirect_rejected');if(res.status===429||res.status>=500){const pause=metaRetryDelay(attempts,res.headers?.get('Retry-After'));if(attempts++<2&&pause<=5000&&(!budget||Date.now()+pause<budget.deadline)){await new Promise(r=>setTimeout(r,pause));continue}throw Object.assign(Error('rate_limited_or_unavailable'),{retryAfter:Math.ceil(pause/1000)})}let obj;try{obj=await res.json()}catch{throw Error('invalid_graph_response')}if(!res.ok||obj.error){let code=obj?.error?.code||res.status;const e=Error('Graph error '+String(Number(code)||res.status));e.category=metaErrorCategory(obj.error,res.status);e.subcode=Number(obj.error?.error_subcode)||null;throw e}return obj}}
+async function graph(path,token,params={},version=META_VERSION,budget=null){if(!/^v[0-9]+\.0$/.test(version))throw Error('invalid_graph_version');let u=new URL('https://graph.facebook.com/'+version+'/'+path.replace(/^\//,''));for(let [k,v] of Object.entries(params))u.searchParams.set(k,String(v));let attempts=0;while(true){if(budget?.blockedUntil>Date.now())throw Object.assign(Error("rate_limited_or_unavailable"),{retryAfter:Math.ceil((budget.blockedUntil-Date.now())/1000)});if(budget&&(budget.calls>=12||Date.now()>budget.deadline))throw Error("meta_request_budget");if(budget)budget.calls++;let res;try{res=await fetch(u.toString(),{redirect:'manual',headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(15000)})}catch{throw Error('network_unavailable')}if(res.status>=300&&res.status<400)throw Error('graph_redirect_rejected');if(res.status===429||res.status>=500){const pause=metaRetryDelay(attempts,res.headers?.get('Retry-After'));if(attempts++<2&&pause<=5000&&(!budget||Date.now()+pause<budget.deadline)){await new Promise(r=>setTimeout(r,pause));continue}if(budget)budget.blockedUntil=Date.now()+Math.max(60000,pause);throw Object.assign(Error('rate_limited_or_unavailable'),{retryAfter:Math.ceil(Math.max(60000,pause)/1000)})}let obj;try{obj=await res.json()}catch{throw Error('invalid_graph_response')}if(!res.ok||obj.error){let code=obj?.error?.code||res.status;const e=Error('Graph error '+String(Number(code)||res.status));e.category=metaErrorCategory(obj.error,res.status);if(e.category==='rate_limited'&&budget)budget.blockedUntil=Date.now()+Math.max(60000,metaRetryDelay(0,res.headers?.get('Retry-After')));e.subcode=Number(obj.error?.error_subcode)||null;throw e}return obj}}
 async function graphPages(path,token,params,max=10){let all=[],cursor;for(let i=0;i<max;i++){let data=await graph(path,token,{...params,...(cursor?{after:cursor}:{})});if(!Array.isArray(data.data))throw Error('unexpected_pagination');all.push(...data.data);let next=data.paging?.cursors?.after;if(!next||next===cursor||!data.paging?.next)break;cursor=next}return all}
 async function metaIssue(db,asset,kind,metric,reason){await db.put('meta_capabilities',{asset_id:asset,kind,metric,status:'unavailable',reason:reason.slice(0,100),checked_at:contentNow()});}
 function safeMetricValues(raw){let values=[];for(let v of raw?.values||[])if(typeof v.value==='number'&&Number.isFinite(v.value))values.push({at:v.end_time||null,value:v.value});return values}
@@ -61,14 +61,54 @@ async function metaDiscoverNamedAccounts(call,token,state){
  try{return await request('me/accounts',{limit:10,...(state.pages_after?{after:state.pages_after}:{})});}
  catch(e){if(!/^Graph error (100|200)$/.test(e.message))throw e;const me=await request('me');return {data:me.id?[me]:[]};}
 }
+function metaRefreshKey(p){return 'meta:refresh:'+p.platform+':'+p.account_id+':'+p.post_id;}
+async function metaQueueGroupMetrics(env,input){
+ metaCredential(env.META_SYSVAR);const id=contentID(input.group_id);let response;
+ await env.STORE.transact(['content_duplicate_groups','content_posts','meta_content','content_collect_state'],tx=>{
+  const group=groupFromTables(currentDuplicateGroups(tx.rows('content_duplicate_groups')),tx.rows('content_posts'),id);
+  if(!['facebook','instagram'].includes(group.platform))throw Error('metrics_platform_unavailable');
+  const media=tx.rows('meta_content'),rows=group.members.filter(p=>p.delete_status==='published'&&media.some(m=>m.id===p.post_id&&m.platform===p.platform&&m.asset_id===p.account_id));
+  if(!rows.length)throw Error('metrics_need_meta_collection');
+  let queued=0,pending=0,cooling=0;
+  for(const p of rows.slice(0,100)){
+   const key=metaRefreshKey(p),previous=JSON.parse(tx.find('content_collect_state',{id:key})?.payload||'{}');
+   if(previous.status==='queued'){pending++;continue;}
+   if(Date.now()-Date.parse(previous.requested_at||'')<900000){cooling++;continue;}
+   tx.put('content_collect_state',{id:key,payload:JSON.stringify({platform:p.platform,account_id:p.account_id,post_id:p.post_id,status:'queued',requested_at:contentNow(),nonce:crypto.randomUUID()})});queued++;pending++;
+  }
+  if(queued)tx.put('content_collect_state',{id:'request:meta_collect',payload:JSON.stringify({requested_at:contentNow(),nonce:crypto.randomUUID()})});
+  response={queued,pending,cooling,eligible:rows.length,scope:'selected_group',message:pending?'Metrics refresh queued. Background collection checks two posts per batch. Refresh groups to read the results.':'These posts were recently requested. Wait 15 minutes between requests; refresh groups to read the latest result.'};
+ });return response;
+}
+// A rejected expanded field must not discard independently readable engagement counts.
+async function metaFacebookCounts(call,id,token,capabilities,budget){
+ const fields={likes:'likes.limit(0).summary(true)',comments:'comments.limit(0).summary(true)',shares:'shares'},values={},errors={};
+ const extract=(data,m)=>m==='shares'?data.shares?.count:data[m]?.summary?.total_count;
+ let combined;
+ try{combined=await call(id,token,{fields:Object.values(fields).join(',')});}
+ catch(e){
+  if(!['invalid_parameter_or_object','metric_unsupported'].includes(metaReason(e))){for(const m of Object.keys(fields))errors[m]=metaReason(e);return {values,errors};}
+  for(const [m,field] of Object.entries(fields)){
+   const recent=capabilities.find(c=>c.asset_id===id&&c.metric===m&&c.status==='unavailable'&&/permission_denied|metric_unsupported/.test(c.reason)&&Date.now()-Date.parse(c.checked_at)<3600000);
+   if(recent){errors[m]=metaReason({category:recent.reason.includes('permission_denied')?'permission_denied':'metric_unsupported'});continue;}
+   if(budget.calls>=10){errors[m]='meta_request_budget';continue;}
+   try{const data=await call(id,token,{fields:field}),v=extract(data,m);if(typeof v==='number'&&Number.isFinite(v)&&v>=0)values[m]=v;else errors[m]='metric_not_returned';}
+   catch(f){errors[m]=metaReason(f);if(/rate_limited|credential_rejected/.test(errors[m])){for(const k of Object.keys(fields))if(!(k in values)&&!(k in errors))errors[k]=errors[m];break;}}
+  }return {values,errors};
+ }
+ for(const m of Object.keys(fields)){const v=extract(combined,m);if(typeof v==='number'&&Number.isFinite(v)&&v>=0)values[m]=v;else errors[m]='metric_not_returned';}
+ return {values,errors};
+}
 async function metaSync(env){
  await contentReady(env);const db=env.STORE,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=crypto.randomUUID();
  if(!await db.claim('content_jobs','meta_collect',lease,600000))return {status:'already_running'};
- let state={},asset=null,phase='discovery';
+ let state={},asset=null,phase='discovery',refreshBatch=[],pendingRefresh=[];
  const budget={calls:0,deadline:Date.now()+80000},call=(p,t,q)=>graph(p,t,q,version,budget);
  try{
   const {tables}=await db.snapshot(['meta_assets','meta_content','meta_capabilities','content_collect_state']);
   state=JSON.parse(tables.content_collect_state.find(r=>r.id==='meta')?.payload||'{}');
+  pendingRefresh=tables.content_collect_state.filter(r=>r.id.startsWith('meta:refresh:')).map(r=>({...JSON.parse(r.payload),key:r.id})).filter(r=>r.status==='queued').sort((a,b)=>a.requested_at.localeCompare(b.requested_at));
+  if(Date.parse(state.next_attempt||'')>Date.now()){await db.transact(['content_jobs','content_collect_state'],tx=>{const job=tx.find('content_jobs',{id:'meta_collect'});if(job?.lease!==lease)return;Object.assign(job,{status:'deferred',lease:null,lease_until:null});});return {status:'deferred',next_attempt:state.next_attempt};}
   const capabilities=tables.meta_capabilities,assetRows=[],mediaRows=[],snapshotRows=[],capabilityRows=[],extraState=[],posts=[];
   const discovered=await metaDiscoverNamedAccounts(call,token,state);
   if(!Array.isArray(discovered.data))throw Error('discovery_data_missing');
@@ -80,9 +120,12 @@ async function metaSync(env){
   if(!assets.length)throw Error('no_accessible_pages_on_discovery_page');
   // Least recently attempted account wins, including failed accounts. A bad account cannot starve the rest.
   asset=assets.sort((a,b)=>String(state[a.id]?.attempted_at||'').localeCompare(String(state[b.id]?.attempted_at||'')))[0];
+  const requested=pendingRefresh.find(r=>assets.some(a=>a.id===r.account_id&&a.platform===r.platform));
+  if(requested&&!state.last_metric_refresh){asset=assets.find(a=>a.id===requested.account_id&&a.platform===requested.platform);refreshBatch=pendingRefresh.filter(r=>r.platform===asset.platform&&r.account_id===asset.id).slice(0,2);}
+  state.last_metric_refresh=refreshBatch.length>0;
   const st=state[asset.id]||{};state[asset.id]=st;st.attempted_at=contentNow();
   const phases=asset.platform==='instagram'?['recent','history','account','revisit','stories']:['recent','history','account','revisit'];
-  phase=phases[(st.turn||0)%phases.length];st.turn=(st.turn||0)+1;st.phase=phase;
+  phase=refreshBatch.length?'metrics_refresh':phases[(st.turn||0)%phases.length];if(!refreshBatch.length)st.turn=(st.turn||0)+1;st.phase=phase;
   const pageId=asset.page_id||asset.id;let accountToken=freshTokens.get(pageId);
   if(!accountToken){const auth=await call(pageId,token,{fields:'id,access_token'});accountToken=auth.access_token||token;}
   const stats={status:'ok',asset_id:asset.id,platform:asset.platform,phase,media:0,metric_failures:0,api_version:version,collection:'bounded_incremental',history_complete:!!st.history_complete,more_available:false};
@@ -99,9 +142,9 @@ async function metaSync(env){
   }else{
    const fields=asset.platform==='instagram'?'id,media_type,media_product_type,timestamp,caption,permalink,thumbnail_url,media_url,like_count,comments_count':'id,created_time,message,permalink_url,full_picture';
    let items=[];
-   if(phase==='revisit'){
-    const candidates=tables.meta_content.filter(r=>r.asset_id===asset.id&&r.kind!=='STORY').sort((a,b)=>{const time=r=>JSON.parse(tables.content_collect_state.find(x=>x.id==='meta:post:'+r.id)?.payload||'{}').checked_at||'';return time(a).localeCompare(time(b))||a.id.localeCompare(b.id)}).slice(0,2);
-    for(const r of candidates){try{items.push(await call(r.id,accountToken,{fields}));}catch(e){extraState.push({id:'meta:post:'+r.id,payload:JSON.stringify({checked_at:contentNow(),error:metaReason(e)})});stats.metric_failures++;}}
+   if(phase==='revisit'||phase==='metrics_refresh'){
+    const candidates=tables.meta_content.filter(r=>r.asset_id===asset.id&&r.platform===asset.platform&&r.kind!=='STORY'&&(!refreshBatch.length||refreshBatch.some(q=>q.post_id===r.id))).sort((a,b)=>{const time=r=>JSON.parse(tables.content_collect_state.find(x=>x.id==='meta:post:'+r.id)?.payload||'{}').checked_at||'';return time(a).localeCompare(time(b))||a.id.localeCompare(b.id)}).slice(0,2);
+    for(const r of candidates){try{const fetched=await call(r.id,accountToken,{fields});if(String(fetched.id)!==r.id)throw Error('metric_post_identity_mismatch');items.push(fetched);}catch(e){extraState.push({id:'meta:post:'+r.id,payload:JSON.stringify({checked_at:contentNow(),error:metaReason(e)})});stats.metric_failures++;}}
    }else if(phase!=='history'||!st.history_complete){
     const edge=asset.platform==='instagram'?(phase==='stories'?'stories':'media'):'published_posts',cursor=phase==='history'?st.after:phase==='stories'?st.story_after:null;
     const page=await call(asset.id+'/'+edge,accountToken,{fields,limit:2,...(cursor?{after:cursor}:{})});
@@ -114,9 +157,12 @@ async function metaSync(env){
    for(const item of items){
     if(!item.id)throw Error('media_id_missing');const id=String(item.id),kind=asset.platform==='instagram'?(phase==='stories'?'STORY':item.media_product_type==='REELS'?'REELS':item.media_type||'IMAGE'):'POST',at=contentNow();
     const metrics=metricObject({likes:item.like_count,comments:item.comments_count});
-    if(asset.platform==='facebook'){try{const counts=await call(id,accountToken,{fields:'likes.limit(0).summary(true),comments.limit(0).summary(true),shares'});Object.assign(metrics,metricObject({likes:counts.likes?.summary?.total_count,comments:counts.comments?.summary?.total_count,shares:counts.shares?.count}));}catch(e){stats.metric_failures++;capabilityRows.push({asset_id:id,kind,metric:'engagement_fields',status:'unavailable',reason:metaReason(e),checked_at:at});}}
+    if(asset.platform==='facebook'){
+     const counts=await metaFacebookCounts(call,id,accountToken,capabilities,budget);Object.assign(metrics,counts.values);
+     for(const [metric,reason] of Object.entries(counts.errors)){stats.metric_failures++;capabilityRows.push({asset_id:id,kind,metric,status:'unavailable',reason,checked_at:at});}
+    }else for(const metric of ['likes','comments'])if(metrics[metric]===undefined)capabilityRows.push({asset_id:id,kind,metric,status:'unavailable',reason:'metric_not_returned',checked_at:at});
     for(const [metric,value] of Object.entries(metrics)){snapshotRows.push({asset_id:id,kind,metric,observed_at:at,value,source_period:'lifetime'});capabilityRows.push({asset_id:id,kind,metric,status:'available',reason:version+'; object field',checked_at:at});}
-    for(const spec of metaDue(metaCatalog(asset.platform,kind),id,kind,[...capabilities,...capabilityRows])){const v=await probe(id,kind,spec);if(v!==null&&CONTENT_METRICS.has(spec.alias||spec.metric))metrics[spec.alias||spec.metric]=v;}
+    for(const spec of metaDue(metaCatalog(asset.platform,kind).slice().sort((a,b)=>Number(!['views','shares'].includes(a.alias||a.metric))-Number(!['views','shares'].includes(b.alias||b.metric))),id,kind,[...capabilities,...capabilityRows])){const v=await probe(id,kind,spec);if(v!==null&&CONTENT_METRICS.has(spec.alias||spec.metric))metrics[spec.alias||spec.metric]=v;}
     mediaRows.push({id,asset_id:asset.id,platform:asset.platform,kind,published_at:item.timestamp||item.created_time||'',caption:clean(item.caption||item.message,1200),permalink:producerURL(item.permalink||item.permalink_url||''),thumbnail_url:contentPreview(item.thumbnail_url||item.full_picture||item.media_url),first_seen:at,last_seen:at});
     extraState.push({id:'meta:post:'+id,payload:JSON.stringify({checked_at:at})});
     const permalink=item.permalink||item.permalink_url;if(permalink){try{posts.push(postRecord({platform:asset.platform,account_id:asset.id,account_handle:asset.name,post_id:id,permalink,media_type:kind,published_at:item.timestamp||item.created_time,caption:item.caption||item.message||'',preview_url:item.media_url||item.full_picture||item.thumbnail_url,preview_type:item.media_url&&['VIDEO','REELS'].includes(kind)?'video':'image',metrics}));}catch{capabilityRows.push({asset_id:id,kind,metric:'registry_permalink',status:'unavailable',reason:'unsupported_canonical_permalink',checked_at:at});}}
@@ -124,14 +170,15 @@ async function metaSync(env){
   }
   stats.media=mediaRows.length;stats.history_complete=!!st.history_complete;stats.status=stats.metric_failures?'partial':'ok';
   const at=contentNow(),result={asset_id:asset.id,platform:asset.platform,phase,checked_at:at,media_fetched:mediaRows.length,posts_registered:posts.length,missing_permalink:mediaRows.filter(r=>!r.permalink).length,rejected_permalink:capabilityRows.filter(r=>r.metric==='registry_permalink').length,metric_failures:stats.metric_failures,more_available:stats.more_available,api_calls:budget.calls,outcome:phase==='account'?'account_probed':phase==='history'&&stats.history_complete&&!st.after&&!(mediaRows.length||stats.more_available)?'history_exhausted':phase==='revisit'&&!mediaRows.length?'no_revisit_media':!mediaRows.length?'empty_response':posts.length?'collected':'no_registerable_posts'};
-  st.last_result=result;st.last_error=null;state.last_result=result;
+  st.last_result=result;st.last_error=null;state.last_result=result;state.next_attempt=budget.blockedUntil?new Date(budget.blockedUntil).toISOString():null;
   await db.transact(['content_jobs','content_collect_state','meta_assets','meta_content','meta_snapshots','meta_capabilities','content_posts','content_observations','content_sheet_outbox'],tx=>{
    const job=tx.find('content_jobs',{id:'meta_collect'});if(job.lease!==lease||job.lease_until<Date.now())throw Error('store_job_lease_lost');
    for(const row of assetRows)tx.put('meta_assets',row);for(const row of mediaRows)tx.put('meta_content',{...row,first_seen:tx.find('meta_content',{id:row.id})?.first_seen||row.first_seen});
    for(const row of snapshotRows)tx.put('meta_snapshots',row);for(const row of capabilityRows)tx.put('meta_capabilities',row);for(const row of extraState)tx.put('content_collect_state',row);
+   for(const q of refreshBatch){const row=tx.find('content_collect_state',{id:q.key}),current=JSON.parse(row?.payload||'{}');if(current.nonce!==q.nonce)continue;const post=posts.find(p=>p.post_id===q.post_id),failure=extraState.find(s=>s.id==='meta:post:'+q.post_id);const reason=failure?JSON.parse(failure.payload).error:null;row.payload=JSON.stringify({...current,status:post?'checked':'failed',checked_at:at,error:reason||(post?null:'metric_post_unavailable')});}
    mergePostRecords(tx,posts,at);tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});Object.assign(job,{status:stats.status,last_success:at,error_code:null,lease:null,lease_until:null});
   });console.log(JSON.stringify({event:'meta_collection_result',...result}));return stats;
- }catch(e){const reason=metaReason(e);await db.transact(['content_jobs','content_collect_state'],tx=>{const job=tx.find('content_jobs',{id:'meta_collect'});if(job?.lease!==lease)return;if(asset){state[asset.id].last_error=reason;tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});}Object.assign(job,{status:'failed',error_code:reason,lease:null,lease_until:null});});throw Error(reason);}
+ }catch(e){const reason=metaReason(e);if(budget.blockedUntil)state.next_attempt=new Date(budget.blockedUntil).toISOString();await db.transact(['content_jobs','content_collect_state'],tx=>{const job=tx.find('content_jobs',{id:'meta_collect'});if(job?.lease!==lease)return;for(const q of refreshBatch.length?refreshBatch:pendingRefresh){const row=tx.find('content_collect_state',{id:q.key}),current=JSON.parse(row?.payload||'{}');if(current.nonce===q.nonce)row.payload=JSON.stringify({...current,status:'failed',checked_at:contentNow(),error:reason});}if(asset)state[asset.id].last_error=reason;tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});Object.assign(job,{status:'failed',error_code:reason,lease:null,lease_until:null});});throw Error(reason);}
 }
 async function metaProgress(env){
  const {tables:t}=await env.STORE.snapshot(['content_jobs','content_collect_state','meta_assets','meta_content','meta_capabilities']);

@@ -69,7 +69,7 @@ test('groups endpoint uses one consistent snapshot for all groups and preserves 
  for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
  s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
  const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
- s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content']);return snapshot(tables)};
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content','meta_capabilities']);return snapshot(tables)};
  s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
  const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
  assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
@@ -223,4 +223,45 @@ test('overall scan coverage counts all stored accounts once, including accounts 
  assert.deepEqual(JSON.parse(JSON.stringify(p.totals)),{eligible:8,fingerprinted:4,pending:4,accounts:4,accounts_with_posts:3,accounts_fingerprinted:1});assert.equal(p.full_history_verified,false);assert.equal(p.scope,'stored_supported_facebook_instagram_posts');
  assert.equal(p.accounts.find(a=>a.account_id==='99999').eligible,3);assert.equal(p.accounts.find(a=>a.account_id==='empty').eligible,0);assert.equal(p.accounts.filter(a=>a.account_id==='12345').length,2);
  assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);
+});
+
+test('complete group index retains an older account beyond twenty recent groups and loads its exact details on demand',async()=>{
+ const s=setup();await group(s);
+ await s.c.upsertPosts(s.env,[post('a1',{account_id:'17841478352273385',account_handle:'@aand.cut'}),post('a2',{account_id:'17841478352273385',account_handle:'@aand.cut'})]);
+ await s.c.ingestGroups(s.env,[{group_id:'aand_old',platform:'instagram',account_id:'17841478352273385',media_type:'IMAGE',members:['a1','a2'],algorithm:'test',evidence:{}}]);
+ s.sql.prepare("UPDATE content_duplicate_groups SET updated_at='2020-01-01T00:00:00Z' WHERE group_id='aand_old'").run();
+ for(let i=0;i<24;i++)await s.c.ingestGroups(s.env,[{group_id:'recent_'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{}}]);
+ const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;s.env.STORE.snapshot=names=>{reads++;return snapshot(names);};
+ const before=s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n;
+ const listed=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(reads,1);assert.equal(listed.rows.length,20);assert.equal(listed.index_complete,true);assert.equal(listed.index.length,26);assert.equal(listed.total,26);assert.equal(listed.rows.some(g=>g.group_id==='aand_old'),false);
+ const old=listed.index.find(g=>g.group_id==='aand_old');assert.equal(old.account_name,'@aand.cut');assert.equal(old.member_count,2);assert.equal(old.details_loaded,false);assert.equal(old.members,undefined);assert.equal(old.evidence,undefined);
+ const detailed=await s.c.contentApi({url:'https://d.test/api/content/groups?group_id=aand_old',method:'GET'},s.env,{});assert.equal(reads,2);assert.equal(detailed.rows.length,1);assert.equal(detailed.rows[0].details_loaded,true);assert.equal(detailed.rows[0].group_id,'aand_old');assert.ok(detailed.rows[0].members.every(p=>p.account_id==='17841478352273385'));assert.deepEqual(Array.from(detailed.rows[0].members,p=>p.post_id),['a1','a2']);assert.equal(detailed.index,undefined);
+ await assert.rejects(s.c.contentApi({url:'https://d.test/api/content/groups?group_id=not_found',method:'GET'},s.env,{}),/group_not_found_refresh_groups/);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,before);
+});
+
+test('complete group index keeps confirmed review evidence scoped to exact platform and account',async()=>{
+ const s=setup();await group(s);const p=await s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});
+ await s.c.upsertPosts(s.env,[post(1,{account_id:'99999'}),post(2,{account_id:'99999'})]);await s.c.ingestGroups(s.env,[{group_id:'other',platform:'instagram',account_id:'99999',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{}}]);
+ const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(r.index.find(g=>g.group_id==='g').has_confirmed_history,true);assert.equal(r.index.find(g=>g.group_id==='other').has_confirmed_history,false);
+});
+
+
+test('metric evidence distinguishes saved zero, unsupported, denied and missing without leaking provider messages',async()=>{
+ const s=setup();await group(s);
+ await s.c.upsertPosts(s.env,[post(1,{metrics:{views:0,likes:0}})]);
+ await s.env.STORE.put('meta_content',{first_seen:new Date().toISOString(),last_seen:new Date().toISOString(),id:'1',asset_id:'12345',platform:'instagram',kind:'IMAGE'});
+ const now=new Date().toISOString();
+ for(const [metric,status,reason] of [['views','available','v24.0'],['likes','unavailable','permission_denied; SECRET'],['comments','unavailable','v24.0; metric_unsupported'],['shares','unavailable','rate_limited']])await s.env.STORE.put('meta_capabilities',{asset_id:'1',kind:'IMAGE',metric,status,reason,checked_at:now});
+ const response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{}),p=response.rows[0].members.find(p=>p.post_id==='1');
+ assert.equal(p.metrics.views,0);assert.equal(p.metric_status.views.status,'available');assert.equal(p.metrics.likes,0);assert.equal(p.metric_status.likes.refresh_status,'permission_required');assert.equal(p.metric_status.comments.status,'unsupported');assert.equal(p.metric_status.shares.status,'deferred');assert.doesNotMatch(JSON.stringify(p),/SECRET/);
+ const library=await s.c.contentApi({url:'https://d.test/api/content',method:'GET'},s.env,{});assert.deepEqual(library.rows.find(p=>p.post_id==='1').metric_status,p.metric_status);
+ assert.equal(response.rows[0].members.find(p=>p.post_id==='2').metric_status.likes.status,'not_collected');
+});
+
+test('metric failures attach only to the exact platform account post and retain numeric history',async()=>{
+ const s=setup();await group(s);await s.env.STORE.put('meta_content',{first_seen:new Date().toISOString(),last_seen:new Date().toISOString(),id:'1',asset_id:'other',platform:'facebook',kind:'POST'});
+ await s.env.STORE.put('meta_capabilities',{asset_id:'1',kind:'POST',metric:'engagement_fields',status:'unavailable',reason:'permission_denied',checked_at:new Date().toISOString()});
+ let response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].members[0].metric_status.likes.status,'not_collected');
+ await s.env.STORE.put('meta_content',{first_seen:new Date().toISOString(),last_seen:new Date().toISOString(),id:'1',asset_id:'12345',platform:'instagram',kind:'IMAGE'});await s.env.STORE.put('content_collect_state',{id:'meta:post:1',payload:JSON.stringify({error:'network_unavailable',checked_at:new Date().toISOString()})});
+ response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});const p=response.rows[0].members[0];assert.equal(p.metrics.views,10);assert.equal(p.metric_status.views.refresh_status,'failed');assert.equal(p.metric_status.likes.status,'failed');
 });

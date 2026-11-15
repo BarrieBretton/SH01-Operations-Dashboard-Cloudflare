@@ -18,3 +18,21 @@ test('built Worker protects migration routes and uses Sheets after cutover',asyn
 test('scheduler selects one job and records missing Meta configuration safely',async()=>{const h=await directHarness(),oldFetch=globalThis.fetch;globalThis.fetch=h.fetch;try{await h.store.patch('sheet_sync_state',{id:1},{last_attempt:new Date().toISOString()});const {default:worker}=await import('./worker.js'),work=[];await worker.scheduled({}, {...h.env,SHEETS_STORAGE_READY:'1',META_SYNC_ENABLED:'1'}, {waitUntil:p=>work.push(p)});await Promise.all(work);const row=await h.store.find('content_jobs',{id:'meta_collect'});assert.equal(row.status,'failed');assert.equal(row.error_code,'meta_credential_missing');}finally{globalThis.fetch=oldFetch;}});
 
 test('claim consumes the pending request; a new request arriving during work survives finish',async()=>{const h=await directHarness();await h.store.put('content_collect_state',{id:'request:meta_collect',payload:'before'});await h.store.claim('content_jobs','meta_collect','lease',60000);assert.equal(await h.store.find('content_collect_state',{id:'request:meta_collect'}),null);await h.store.put('content_collect_state',{id:'request:meta_collect',payload:'during'});await h.store.finish('content_jobs','meta_collect','lease',{status:'ok'});assert.equal((await h.store.find('content_collect_state',{id:'request:meta_collect'})).payload,'during');});
+
+
+
+test('scheduled metric work honors persisted Meta cooldown even for an explicit refresh request',async()=>{
+ const h=await directHarness(),oldFetch=globalThis.fetch;globalThis.fetch=h.fetch;
+ try{await h.store.patch('sheet_sync_state',{id:1},{last_attempt:new Date().toISOString()});await h.store.put('content_collect_state',{id:'meta',payload:JSON.stringify({next_attempt:new Date(Date.now()+120000).toISOString()})});await h.store.put('content_collect_state',{id:'request:meta_collect',payload:JSON.stringify({requested_at:new Date().toISOString(),nonce:'fixture'})});
+ const before=await h.store.find('content_jobs',{id:'meta_collect'}),{default:worker}=await import('./worker.js'),work=[];await worker.scheduled({}, {...h.env,SHEETS_STORAGE_READY:'1',META_SYNC_ENABLED:'1'}, {waitUntil:p=>work.push(p)});await Promise.all(work);
+ const after=await h.store.find('content_jobs',{id:'meta_collect'});assert.equal(after.last_attempt,before.last_attempt);assert.ok(await h.store.find('content_collect_state',{id:'request:meta_collect'}));
+ }finally{globalThis.fetch=oldFetch;}
+});
+
+test('remaining requested metric checks enter normal scheduling without repeated priority requests',async()=>{
+ const h=await directHarness(),oldFetch=globalThis.fetch;globalThis.fetch=h.fetch;
+ try{await h.store.patch('sheet_sync_state',{id:1},{last_attempt:new Date().toISOString()});await h.store.put('content_collect_state',{id:'meta:refresh:facebook:100:100_1',payload:JSON.stringify({status:'queued',platform:'facebook',account_id:'100',post_id:'100_1',requested_at:new Date().toISOString()})});
+ const {default:worker}=await import('./worker.js'),work=[];await worker.scheduled({}, {...h.env,SHEETS_STORAGE_READY:'1',META_SYNC_ENABLED:'0'}, {waitUntil:p=>work.push(p)});await Promise.all(work);
+ const job=await h.store.find('content_jobs',{id:'meta_collect'});assert.equal(job.error_code,'meta_credential_missing');assert.equal(await h.store.find('content_collect_state',{id:'request:meta_collect'}),null);
+ }finally{globalThis.fetch=oldFetch;}
+});
