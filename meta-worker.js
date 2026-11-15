@@ -144,7 +144,16 @@ async function metaPreview(env,row){
  const asset=await env.STORE.find('meta_assets',{id:row.account_id});if(!asset)return null;
  const token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,budget={calls:0,deadline:Date.now()+20000};
  const page=await graph(asset.page_id||asset.id,token,{fields:'id,access_token'},version,budget);
- const data=await graph(row.post_id,page.access_token||token,{fields:row.platform==='instagram'?'id,media_url,thumbnail_url,media_type':'id,full_picture'},version,budget);
- const url=contentPreview(data.media_url||data.thumbnail_url||data.full_picture);
- return {url,kind:data.media_url&&data.media_type==='VIDEO'?'video':'image',available:!!url,refreshed:true};
+ const data=await graph(row.post_id,page.access_token||token,{fields:row.platform==='instagram'?'id,media_url,thumbnail_url,media_type':'id,full_picture,attachments{media_type,type,media,target,subattachments}'},version,budget);
+ let source=data.media_url||data.thumbnail_url||data.full_picture,kind=data.media_url&&data.media_type==='VIDEO'?'video':'image';
+ const attachment=data.attachments?.data?.[0];
+ const isVideo=row.platform==='facebook'&&(attachment?.media_type==='video'||String(attachment?.type||'').startsWith('video'));
+ if(isVideo){
+  source=attachment.media?.source||'';
+  const target=String(attachment.target?.id||'');
+  if(!source&&/^\d+$/.test(target))source=(await graph(target,page.access_token||token,{fields:'source'},version,budget)).source||'';
+  if(source)kind='video';else source=data.full_picture||attachment.media?.image?.src||'';
+ }
+ const url=contentPreview(source),poster_only=kind!=='video'&&(isVideo||['VIDEO','REELS'].includes(row.media_type));
+ return {url,kind,available:!!url,refreshed:true,poster_only};
 }

@@ -10,7 +10,7 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
  get('content-metric').value='views';get('content-layout').value='cards';
  return {context,get,requests,api:context.inspectContent};
@@ -33,3 +33,44 @@ test('publication age and windows never reconstruct missing early observations',
 
 test('gallery details are hidden at rest, preserve full captions and use readable time',()=>{const {api}=setup();const r={...post,caption:'<script>bad</script>'+ 'x'.repeat(400)};const markup=api.contentGalleryCard(r,0);assert.match(markup,/class="post-info"[^>]*hidden/);assert.ok(markup.includes('x'.repeat(400)));assert.ok(!markup.includes('<script>'));assert.match(api.contentDate('2026-11-14T13:30:00Z'),/1:30 PM/);assert.equal(api.relativeContentDate('2026-11-14T12:30:00Z',Date.parse('2026-11-14T13:30:00Z')),'1h ago');assert.equal(api.relativeContentDate('2026-11-12T13:30:00Z',Date.parse('2026-11-14T13:30:00Z')),'2d ago');assert.equal(api.relativeContentDate('bad'),'Unknown time');});
 test('information hover is temporary, pin persists, and explicit hide retracts it',()=>{const {api,get}=setup();api.setRows([post]);api.renderContent();const card=get('content-card-0'),panel=get('post-info-0'),corner=get('test-corner'),button=get('test-toggle');card.querySelector=s=>s==='.post-corner'?corner:button;api.setContentInfo(0,true);assert.equal(panel.hidden,false);api.setContentInfo(0,false);assert.equal(panel.hidden,true);api.setContentInfo(0,true,true);api.setContentInfo(0,false);assert.equal(panel.hidden,false);assert.equal(button.attributes['aria-pressed'],'true');api.setContentInfo(0,false,false);assert.equal(panel.hidden,true);assert.equal(button.attributes['aria-expanded'],'false');api.setContentInfo(0,true,true);api.clearContentState();assert.ok(api.contentGalleryCard(post,0).includes('aria-pressed="false"'));});
+
+test('duplicate groups render gallery cards with isolated IDs, full captions, video type and pinned details',()=>{
+ const {api,get}=setup();api.setToken('private');api.setView('cleanup');
+ api.setGroups([{group_id:'g',platform:'facebook',account_id:'acct',media_type:'VIDEO',algorithm:'ordered frames',members:[{...post,platform:'facebook',media_type:'POST',caption:'<script>bad</script>'+'long '.repeat(100)}]}]);
+ get('content-group').value='0';api.renderContentGroup();
+ const html=get('content-group-cards').innerHTML;
+ assert.match(html,/content-preview-g0/);assert.match(html,/post-info-g0/);assert.match(html,/VIDEO/);
+ assert.ok(html.includes('long '.repeat(100)));assert.ok(!html.includes('<script>'));assert.ok(!html.includes('data-content-select'));
+ const card=get('content-card-g0'),corner=get('corner-g'),button=get('toggle-g');card.querySelector=s=>s==='.post-corner'?corner:button;
+ api.setContentInfo('g0',true,true);api.setContentInfo('g0',false);assert.equal(get('post-info-g0').hidden,false);
+ api.setContentInfo('g0',false,false);assert.equal(get('post-info-g0').hidden,true);
+ api.lock();assert.equal(get('content-group-cards').innerHTML,'');assert.equal(api.getGroupRows().length,0);
+});
+test('late request errors stay with their originating content tab and clear on successful retry',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('inventory');let finish;
+ context.fetch=()=>new Promise(resolve=>{finish=resolve});const pending=api.request('/api/content?limit=50');api.setView('cleanup');
+ finish({status:503,ok:false,json:async()=>({error:'store_rate_limited'})});
+ try{await pending;assert.fail('Expected failure')}catch(e){api.contentError(e)}
+ assert.match(get('content-error-inventory').textContent,/store_rate_limited/);
+ assert.equal(get('content-error-cleanup').textContent,'');assert.equal(get('global-notice').textContent,'');
+ api.setView('inventory');context.fetch=async()=>({status:200,ok:true,json:async()=>({rows:[]})});await api.request('/api/content?limit=50');
+ assert.equal(get('content-error-inventory').textContent,'');
+});
+test('video preview resolves playback instead of using a stored thumbnail and creates player controls',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',media_type:'VIDEO',members:[{...post,media_type:'REELS',preview_type:'image',preview_url:'https://a.cdninstagram.com/thumb.jpg'}]}]);get('content-group').value='0';api.renderContentGroup();
+ let calls=0;context.fetch=async()=>{calls++;return {status:200,ok:true,json:async()=>({available:true,kind:'video',url:'https://a.cdninstagram.com/video.mp4'})}};
+ const pending=api.performContentPreview('g0');for(let i=0;i<8;i++)await Promise.resolve();
+ const video=get('content-preview-g0').children[0];assert.ok(video);assert.equal(video.controls,true);assert.equal(video.playsInline,true);assert.equal(video.preload,'metadata');assert.equal(calls,1);
+ video.onloadedmetadata();await pending;
+});
+
+test('producer stock renders before slow source evidence and repeated checks coalesce',async()=>{
+ const {api,context,get,requests}=setup();api.setToken('private');let sourceFinish;
+ context.fetch=async path=>{requests.push(path);if(path==='/api/producer-sources')return new Promise(resolve=>{sourceFinish=resolve});return {ok:true,status:200,json:async()=>({rows:[],sync:{status:'ok',last_success:'2026-11-14T22:07:00Z'}})};};
+ const first=api.loadProducers(),second=api.loadProducers();for(let i=0;i<8;i++)await Promise.resolve();
+ assert.equal(requests.length,2);assert.match(get('producer-refresh-status').textContent,/Dashboard checked/);assert.match(get('sheet-health').textContent,/10:07 PM/);
+ sourceFinish({ok:false,status:503,json:async()=>({error:'store_rate_limited'})});await Promise.all([first,second]);
+ assert.match(get('producer-refresh-status').textContent,/Source evidence:.*store_rate_limited/);assert.equal(get('refresh-producers').disabled,false);
+ context.fetch=async path=>({ok:true,status:200,json:async()=>path==='/api/producers'?{rows:[],sync:{status:'ok',last_success:'2026-11-14T22:07:00Z'}}:{rows:[],schedule:[]}});
+ await api.loadProducers();assert.match(get('producer-refresh-status').textContent,/Stored stock unchanged/);assert.doesNotMatch(get('producer-refresh-status').textContent,/store_rate_limited/);
+});

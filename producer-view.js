@@ -2,19 +2,42 @@
 let sourceReport=null,sourceRows=[],sourcePage=0,itemPage=null;
 function status(p){if(p.measurement!=='measured'||p.ready_count===null)return 'unknown';if(isStale(p))return 'stale';if(!p.ready_count)return p.total_count>0&&p.consumed_count===p.total_count?'consumed':'empty';return p.ready_count<p.threshold?'low':'ready'}
 function stockBadge(s){const colors={consumed:'red',empty:'red',low:'amber',ready:'green',stale:'amber',unknown:'muted'};const titles={consumed:'Consumed',empty:'No eligible items',low:'Low inventory',ready:'Ready',stale:'Stale',unknown:'Unknown'};return '<span class="badge '+colors[s]+'">'+titles[s]+'</span>'}
-async function loadProducers(){
- banner('Loading source evidence and measured inventory…');
- const [d,s]=await Promise.all([api('/api/producers'),api('/api/producer-sources')]);
- producerList=d.rows||[];sourceReport=s;
- const health=d.sync||{};
- $('sheet-health').textContent='Sheets: '+(health.status||'never')+' · last successful fetch: '+(health.last_success?contentDate(health.last_success):'never')+' · '+(health.stale?'STALE / UNVERIFIED':'within 30 minutes')+' · scheduled every 10 minutes'+(health.error_code?' · '+health.error_code:'');
+let producerLoad=null,producerRowsSignature=null;
+function loadProducers(){
+ if(producerLoad)return producerLoad;
+ const epoch=authEpoch,button=$('refresh-producers');button.disabled=true;button.textContent='Checking stored data…';
+ const work=loadProducerSnapshot(epoch);producerLoad=work;
+ return work.finally(()=>{if(producerLoad===work){producerLoad=null;button.disabled=false;button.textContent='Refresh stored data';}});
+}
+async function loadProducerSnapshot(epoch){
+ $('producer-refresh-status').textContent='Checking saved stock and source evidence…';
+ let checkedAt='',sourceAt='',changed=false;
+ const stock=api('/api/producers').then(d=>{
+  if(epoch!==authEpoch||!token)return;
+  const signature=JSON.stringify(d.rows||[]);changed=producerRowsSignature!==signature;producerRowsSignature=signature;
+  producerList=d.rows||[];const health=d.sync||{};sourceAt=health.last_success||'';checkedAt=new Date().toISOString();
+  $('sheet-health').textContent='Source collection: '+(health.status||'never')+' · last successful collection: '+contentDate(sourceAt)+' · '+(health.stale?'STALE / UNVERIFIED':'within 30 minutes')+' · scheduled every 10 minutes'+(health.error_code?' · '+health.error_code:'');
+  renderProducers();
+  $('producer-refresh-status').textContent='Dashboard checked '+contentDate(checkedAt)+' · '+(changed?'Stored stock updated.':'Stored stock unchanged.')+' Checking source evidence…';
+  return d;
+ });
+ const sources=api('/api/producer-sources').then(s=>{
+  if(epoch!==authEpoch||!token)return;
+  sourceReport=s;
  const selected=$('source-kind').value;
  $('source-kind').innerHTML='<option value="">All kinds</option>'+[...new Set((s.rows||[]).map(x=>x.kind))].sort().map(k=>'<option value="'+esc(k)+'">'+esc(k)+'</option>').join('');$('source-kind').value=selected;
  $('source-coverage').textContent=(s.coverage?.workflows||0)+' workflows / '+(s.coverage?.nodes||0)+' nodes inventoried from '+s.source_archive+'. Workflow definitions are an export snapshot, not live n8n health. Account routing evidence: '+s.schedule_evidence+'. Unknown inventory is never zero.';
  $('source-queues').innerHTML=(s.references||[]).map(r=>'<tr><td>'+esc(r.tab)+'</td><td>'+esc(r.status)+(r.error_code?'<div class="sub">'+esc(r.error_code)+'</div>':'')+'</td><td>'+esc(r.rows??'Unknown')+'</td><td>'+esc(JSON.stringify(r.status_counts||{}))+'</td></tr>').join('');
  $('source-issues').textContent=(s.coverage?.unresolved_code_nodes||0)+' nodes contain I/O or redacted code requiring runtime evidence; '+(s.coverage?.unresolved_subworkflow_calls||0)+' subworkflow targets unresolved. '+(s.schedule||[]).filter(r=>!r.workflow_id).length+' current schedule rows do not match a unique exported workflow. Credential values, CFG settings and dynamic folder/channel choices are not inferred.';
- renderProducers();renderSources();renderProducerSchedule();banner(d.warning||'');$('freshness').textContent='Stored data refreshed '+contentDate(new Date().toISOString());
+
+  renderSources();renderProducerSchedule();return s;
+ });
+ const results=await Promise.allSettled([stock,sources]);if(epoch!==authEpoch||!token)return;
+ const messages=results.map((r,i)=>r.status==='rejected'&&r.reason.name!=='AbortError'?(i===0?'Stored stock':'Source evidence')+': '+r.reason.message:'').filter(Boolean);
+ $('producer-refresh-status').textContent=(checkedAt?'Dashboard checked '+contentDate(checkedAt)+' · Source collected '+contentDate(sourceAt)+' · '+(changed?'Stored stock updated.':'Stored stock unchanged.'):'Stored stock was not refreshed; previous values remain visible.')+(messages.length?' '+messages.join(' · '):'')+' Display checks run every 60 seconds while this page is visible. Use Queue Sheets sync to request new source collection.';
+ if(checkedAt&&!$('producer-view').classList.contains('hidden'))$('freshness').textContent='Producer dashboard checked '+contentDate(checkedAt);
 }
+
 function renderProducers(){
  const terms=$('producer-search').value.trim().toLowerCase().split(/\s+/),desired=$('producer-status').value,fresh=$('producer-fresh').value;
  const rows=producerList.filter(p=>terms.every(t=>(p.name+' '+p.account+' '+p.source_tab+' '+(p.creators||[]).join(' ')+' '+workflowRefs(p).join(' ')).toLowerCase().includes(t))&&(!desired||status(p)===desired)&&(!fresh||(fresh==='stale')===isStale(p)));

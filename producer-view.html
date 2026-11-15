@@ -13,7 +13,8 @@
   <label>Sort<select id="producer-sort"><option value="attention">Needs attention</option><option value="name">Account name</option><option value="remaining">Fewest eligible</option></select></label>
   <button class="btn" id="refresh-producers">Refresh stored data</button><button class="btn" id="export-producers">Export stock CSV</button>
  </div>
- <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Status</th><th>Workflow association</th><th>Source fetch</th><th>Items</th></tr></thead><tbody id="producers"></tbody></table></div>
+ <p id="producer-refresh-status" class="legend" role="status" aria-live="polite">Refresh reloads the stored snapshot. Source collection runs separately; use Queue Sheets sync to request it.</p>
+ <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Status</th><th>Workflow association</th><th>Source collected (UTC)</th><th>Items</th></tr></thead><tbody id="producers"></tbody></table></div>
  <div id="producer-empty" class="empty hidden">No matching verified stock. Queue a Sheets sync if this is the first run after the correction.</div>
  <div id="item-panel" class="hidden"><button class="btn" id="close-items">Close items</button><h3 id="item-title">Items</h3><p class="sub">Links only; no media downloaded. All pages belong to the same snapshot. Links requiring expired signed credentials may need refreshing at the source.</p><div class="scroll"><table><thead><tr><th>Tab / row / creator</th><th>Item link</th><th>Status</th><th>Approved</th><th>Eligibility</th></tr></thead><tbody id="items"></tbody></table></div><button class="btn hidden" id="more-items">Load more items</button></div>
  <details class="schedule-panel"><summary>Workflow schedule <span class="sub">· configured times and source evidence</span></summary>
