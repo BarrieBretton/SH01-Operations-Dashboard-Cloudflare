@@ -11,7 +11,7 @@ function setup(){
  function prepare(q){let a=[];return {bind(...v){a=v;return this},run(){return {meta:{changes:sql.prepare(q).run(...a).changes}}},all(){return {results:sql.prepare(q).all(...a)}},first(){return sql.prepare(q).get(...a)}}}
  const env={DB:{prepare,batch(a){sql.exec('BEGIN');try{const r=a.map(x=>x.run());sql.exec('COMMIT');return r}catch(e){sql.exec('ROLLBACK');throw e}}},GOOGLE_SHEETS_WRITE_ENABLED:'1'};
  const ctx={URL,Date,crypto:webcrypto,TextEncoder,console,JSON,Map,Set,Number,AbortSignal,clean:(s,n=500)=>String(s??'').slice(0,n),iso:s=>{const d=new Date(s);return Number.isNaN(+d)?null:d.toISOString()},producerURL:s=>s,json:x=>x,error:(m,s)=>({error:m,status:s}),producerHash:async s=>Array.from(new Uint8Array(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('')};
- attachStore(env,sql,ctx);vm.createContext(ctx);vm.runInContext(read('./content-ledger.js')+';globalThis.f={canonicalPostURL,contentPreview,rankDuplicateMembers,upsertPosts,ingestGroups,planCleanup,queueCleanup,duplicateGroup,contentApi,mirrorContentSheets};',ctx);
+ attachStore(env,sql,ctx);vm.createContext(ctx);vm.runInContext(read('./content-ledger.js')+';globalThis.f={groupReviewState,canonicalPostURL,contentPreview,rankDuplicateMembers,upsertPosts,ingestGroups,planCleanup,queueCleanup,duplicateGroup,contentApi,mirrorContentSheets};',ctx);
  return {sql,env,c:ctx.f,ctx};
 }
 const post=(n,extra={})=>({platform:'instagram',account_id:'12345',post_id:String(n),permalink:'https://www.instagram.com/p/test'+n+'/',media_type:'IMAGE',metrics:{views:n*10},...extra});
@@ -69,9 +69,33 @@ test('groups endpoint uses one consistent snapshot for all groups and preserves 
  for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
  s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
  const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
- s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts']);return snapshot(tables)};
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);return snapshot(tables)};
  s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
  const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
  assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
  for(const g of r.rows){assert.ok(g.missing_members.includes('2'));assert.ok(g.members.every(p=>p.account_id==='12345'&&p.platform==='instagram'));assert.equal(g.review_status,'candidate_requires_confirmation');}
+});
+
+test('confirmed keep and removal decisions survive a fresh group read and expired confirmation window',async()=>{
+ const s=setup();await group(s);const plan=await s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'views'});
+ let response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
+ assert.equal(response.rows[0].has_confirmed_history,false,'unconfirmed previews are not scheduled');
+ const result=await s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation});assert.ok(result.confirmed_at);
+ s.sql.prepare("UPDATE content_cleanup_plans SET expires_at='2000-01-01T00:00:00Z'").run();
+ response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
+ const g=response.rows[0];assert.equal(g.has_confirmed_history,true);
+ const kept=g.members.find(p=>p.post_id==='4'),removed=g.members.find(p=>p.post_id==='1');
+ assert.equal(kept.cleanup_review.decision,'keep');assert.equal(kept.delete_status,'published');
+ assert.equal(removed.cleanup_review.decision,'remove');assert.equal(removed.cleanup_review.queue_status,'awaiting_sheet');assert.equal(removed.cleanup_review.removal_scheduled_at,null);
+ assert.equal(removed.cleanup_review.confirmed_at,result.confirmed_at);await assert.rejects(s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'views'}),/already_queued/);
+});
+
+test('history and queue annotations match exact platform and account, including legacy confirmed plans',()=>{
+ const {c}=setup();const g={platform:'instagram',account_id:'12345',members:[post(1),post(2)]};
+ const legacy={plan_id:'old',committed:1,payload:JSON.stringify({platform:'instagram',account_id:'12345',keep:['1'],remove:[{post_id:'2'}]})};
+ const queue=[{platform:'instagram',account_id:'12345',post_id:'2',status:'queued_clickouts',created_at:'2026-11-14T10:00:00Z'}];
+ const result=c.groupReviewState(g,[legacy],queue);assert.equal(result.members[0].cleanup_review.confirmed_at,queue[0].created_at);
+ for(const other of [{platform:'facebook',account_id:'12345'},{platform:'instagram',account_id:'other'}]){
+  const different={...g,...other,members:g.members.map(p=>({...p,...other}))};const clean=c.groupReviewState(different,[legacy],queue);assert.equal(clean.has_confirmed_history,false);assert.equal(clean.members[0].cleanup_review.decision,undefined);assert.equal(clean.members[1].cleanup_review.queue_status,null);
+ }
 });

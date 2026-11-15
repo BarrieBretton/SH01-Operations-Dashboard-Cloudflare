@@ -10,7 +10,7 @@ function loadProducers(){
  return work.finally(()=>{if(producerLoad===work){producerLoad=null;button.disabled=false;button.textContent='Refresh stored data';}});
 }
 async function loadProducerSnapshot(epoch){
- $('producer-refresh-status').textContent='Checking saved stock and source evidence…';
+ setActionFeedback('producer-error','');setActionFeedback('producer-sources-error','');$('producer-refresh-status').textContent='Checking saved stock and source evidence…';
  let checkedAt='',sourceAt='',changed=false;
  const stock=api('/api/producers').then(d=>{
   if(epoch!==authEpoch||!token)return;
@@ -33,8 +33,9 @@ async function loadProducerSnapshot(epoch){
   renderSources();renderProducerSchedule();return s;
  });
  const results=await Promise.allSettled([stock,sources]);if(epoch!==authEpoch||!token)return;
+ results.forEach((r,i)=>{if(r.status==='rejected'&&r.reason.name!=='AbortError')setActionFeedback(i===0?'producer-error':'producer-sources-error',r.reason.message);});
  const messages=results.map((r,i)=>r.status==='rejected'&&r.reason.name!=='AbortError'?(i===0?'Stored stock':'Source evidence')+': '+r.reason.message:'').filter(Boolean);
- $('producer-refresh-status').textContent=(checkedAt?'Dashboard checked '+contentDate(checkedAt)+' · Source collected '+contentDate(sourceAt)+' · '+(changed?'Stored stock updated.':'Stored stock unchanged.'):'Stored stock was not refreshed; previous values remain visible.')+(messages.length?' '+messages.join(' · '):'')+' Display checks run every 60 seconds while this page is visible. Use Queue Sheets sync to request new source collection.';
+ $('producer-refresh-status').textContent=(checkedAt?'Dashboard checked '+contentDate(checkedAt)+' · Source collected '+contentDate(sourceAt)+' · '+(changed?'Stored stock updated.':'Stored stock unchanged.'):'Stored stock was not refreshed; previous values remain visible.')+(messages.length?' Some data could not be refreshed; see the message beside that section.':'')+' Display checks run every 60 seconds while this page is visible. Use Queue Sheets sync to request new source collection.';
  if(checkedAt&&!$('producer-view').classList.contains('hidden'))$('freshness').textContent='Producer dashboard checked '+contentDate(checkedAt);
 }
 
@@ -65,13 +66,14 @@ function renderProducerSchedule(){
 }
 async function showItems(id){
  const p=producerList.find(x=>x.producer_id===id);if(!p)return;
- itemPage={id,version:p.version,offset:0};$('items').replaceChildren();$('item-title').textContent=p.name+' · '+p.source_tab;$('item-panel').classList.remove('hidden');await loadItemPage();$('item-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+ setActionFeedback('producer-items-error','');setActionFeedback('producer-items-more-error','');itemPage={id,version:p.version,offset:0};$('items').replaceChildren();$('item-title').textContent=p.name+' · '+p.source_tab;$('item-panel').classList.remove('hidden');$('item-panel').scrollIntoView({behavior:'smooth',block:'nearest'});await loadItemPage();
 }
 async function loadItemPage(){
- if(!itemPage)return;const current=itemPage;
+ if(!itemPage)return;const current=itemPage,epoch=authEpoch,target=current.offset?'producer-items-more-error':'producer-items-error';setActionFeedback(target,'');try{
  const d=await api('/api/producers/'+encodeURIComponent(current.id)+'/items?'+new URLSearchParams({version:current.version,offset:String(current.offset)}));if(itemPage!==current)return;
  $('items').insertAdjacentHTML('beforeend',d.rows.map(x=>'<tr><td>'+esc(x.origin)+' · '+esc(x.source_row??x.item_id)+'<div class="sub">'+esc(x.creator_handle)+'</div></td><td>'+link(x.item_url,x.item_label||'Open item')+'</td><td>'+esc(x.status)+(x.status_conflict?' · CONFLICT':'')+'</td><td>'+esc(x.approved)+'</td><td>'+esc(x.ready?'Eligible':x.consumed?'Consumed':x.status_conflict?'Status conflict':'Not eligible')+'</td></tr>').join(''));
  current.offset=d.next_offset;$('more-items').classList.toggle('hidden',d.next_offset===null);
+ }catch(e){if(itemPage!==current||epoch!==authEpoch)return;e.feedbackTarget=target;throw e;}
 }
 function downloadProducerFile(name,contents,type){const u=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 for(const id of ['producer-search','producer-status','producer-fresh','producer-sort'])$(id).addEventListener('input',renderProducers);

@@ -70,6 +70,28 @@ async function contentList(env,u){
  const limit=Math.min(100,Math.max(1,Math.trunc(Number(u.searchParams.get('limit'))||50))),offset=Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0));storeSort(rows,'-published_at','platform','account_id','post_id');return {rows:rows.slice(offset,offset+limit).map(publicPost),has_more:rows.length>offset+limit,next_offset:rows.length>offset+limit?offset+limit:null};
 }
 function groupFromTables(groups,posts,id){const g=groups.find(x=>x.group_id===id);if(!g)throw Error('group_not_found');const ids=JSON.parse(g.members),rows=posts.filter(r=>r.platform===g.platform&&r.account_id===g.account_id&&ids.includes(r.post_id));storeSort(rows,'post_id');return {...g,members:rows.map(publicPost),missing_members:ids.filter(id=>!rows.some(r=>r.post_id===id)),evidence:JSON.parse(g.evidence),review_status:'candidate_requires_confirmation'};}
+// Review annotations are read-only history. They never participate in plan digests.
+function groupReviewState(group,plans,queue){
+ const history=[];
+ for(const p of plans){
+  if(!Number(p.committed))continue;
+  let d;try{d=JSON.parse(p.payload)}catch{continue}
+  if(d.platform!==group.platform||d.account_id!==group.account_id)continue;
+  const removed=(d.remove||[]).map(x=>typeof x==='object'?x.post_id:x),kept=(d.keep||[]).map(x=>typeof x==='object'?x.post_id:x);
+  const related=queue.filter(q=>q.platform===d.platform&&q.account_id===d.account_id&&removed.includes(q.post_id));
+  const confirmed_at=d.confirmed_at||related.map(q=>q.created_at).filter(Boolean).sort().at(-1)||null;
+  history.push({kept,removed,confirmed_at,plan_id:p.plan_id});
+ }
+ history.sort((a,b)=>(a.confirmed_at||'').localeCompare(b.confirmed_at||'')||a.plan_id.localeCompare(b.plan_id));
+ let prior=false;
+ const members=group.members.map(post=>{
+  let decision=null;for(const h of history){if(h.kept.includes(post.post_id))decision={decision:'keep',confirmed_at:h.confirmed_at,plan_id:h.plan_id};if(h.removed.includes(post.post_id))decision={decision:'remove',confirmed_at:h.confirmed_at,plan_id:h.plan_id};}
+  const q=queue.find(q=>q.platform===post.platform&&q.account_id===post.account_id&&q.post_id===post.post_id);
+  if(decision||q)prior=true;
+  return {...post,cleanup_review:{...decision,queue_status:q?.status||null,queued_at:q?.created_at||null,removal_scheduled_at:null,schedule_status:'not_reported'}};
+ });
+ return {...group,members,has_confirmed_history:prior};
+}
 async function duplicateGroup(env,id){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts']);return groupFromTables(tables.content_duplicate_groups,tables.content_posts,contentID(id));}
 async function ingestGroups(env,groups){
  if(!Array.isArray(groups)||groups.length>10)throw Error('maximum_10_groups');
@@ -97,7 +119,7 @@ async function queueCleanup(env,b){
   const p=tx.find('content_cleanup_plans',{plan_id:contentID(b.plan_id)});if(!p||p.committed||Date.parse(p.expires_at)<Date.now())throw Error('plan_missing_used_or_expired');const data=JSON.parse(p.payload);if(b.confirmation!==data.confirmation)throw Error('confirmation_mismatch');
   const group=groupFromTables(tx.rows('content_duplicate_groups'),tx.rows('content_posts'),p.group_id);if(await producerHash(JSON.stringify(group))!==p.source_digest)throw Error('group_or_metrics_changed_preview_again');
   const at=contentNow();for(const x of data.remove){const w={platform:data.platform,account_id:data.account_id,post_id:x.post_id};if(tx.find('content_deletion_queue',w))throw Error('post_already_queued');const request_id=crypto.randomUUID(),rec={request_id,...w,permalink:x.permalink};tx.put('content_deletion_queue',{...rec,status:'awaiting_sheet',reason:'confirmed_duplicate_plan',created_at:at,updated_at:at});tx.put('content_sheet_outbox',{record_key:'delete:'+request_id,kind:'clickouts',payload:JSON.stringify(rec),status:'pending',error_code:null,updated_at:at});Object.assign(tx.find('content_posts',w),{delete_status:'awaiting_sheet'});}
-  p.committed=1;return {queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
+  p.payload=JSON.stringify({...data,confirmed_at:at});p.committed=1;return {confirmed_at:at,queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
  });
 }
 async function contentStatus(env){
@@ -175,7 +197,7 @@ async function contentApi(req,env,ctx) {
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
   return json({rows:rows.slice(0,500),limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env)});
  }
- if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupFromTables(groups,tables.content_posts,g.group_id));return json({rows,limit:20});}
+ if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue));return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
  if(p==='/api/content'&&req.method==='GET')return json(await contentList(env,u));
  if(p==='/api/content/series'&&req.method==='GET'){
   const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id')),id=contentID(u.searchParams.get('post_id')),metric=u.searchParams.get('metric');if(!CONTENT_METRICS.has(metric))throw Error('unsupported_metric');

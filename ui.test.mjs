@@ -6,7 +6,7 @@ const html=fs.readFileSync(new URL('./dashboard.html',import.meta.url),'utf8');
 const source=html.split('<script>')[1].split('</script>')[0];
 function setup(){
  const nodes=new Map(),storage=new Map();
- const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,dataset:{},classList:{add(){},remove(){},toggle(){}},setAttribute(){},addEventListener(){},replaceChildren(){this.innerHTML=''},scrollIntoView(){},insertAdjacentHTML(_,s){this.innerHTML+=s},click(){this.onclick?.()} });return nodes.get(id)};
+ const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',innerHTML:'',textContent:'',disabled:false,dataset:{},classList:{add(){},remove(){},toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},replaceChildren(){this.innerHTML=''},scrollIntoView(){},insertAdjacentHTML(_,s){this.innerHTML+=s},click(){this.onclick?.()} });return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:()=>({click(){}})},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async()=>({status:200,ok:true,json:async()=>({rows:[]})})};
  vm.createContext(context);
  const instrumented=source.replace("let sessionExpires=0,authEpoch=0,filteredProducers=[];","globalThis.inspect={setRows:x=>{producerList=x},render:()=>renderProducers(),status:x=>status(x),lock:()=>lock(),setToken:x=>{token=x},getToken:()=>token};let sessionExpires=0,authEpoch=0,filteredProducers=[];");
