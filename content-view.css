@@ -63,3 +63,6 @@ html[data-theme=light]{--success:#17683b;--success-bg:#e4f5ec;--warn:#805100;--w
 .gallery-decision[data-tone=keep] strong,.key-keep{color:var(--success)}.gallery-decision[data-tone=remove] strong,.key-remove{color:var(--danger)}.gallery-decision[data-tone=queued] strong,.key-queued{color:var(--warn)}
 .review-key{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;color:var(--muted)}.review-key>span{border:1px solid currentColor;border-radius:6px;padding:4px 8px}
 @media(max-width:700px){.duplicate-workspace{padding:14px}.gallery-summary{padding:12px}.gallery-metrics dd{font-size:15px}.gallery-summary-top{padding-right:42px}}
+
+/* Weighted review scores remain next to the raw metrics. */
+.gallery-metrics .gallery-score{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 12px;padding:8px}.gallery-score dd{margin:0}.gallery-score small{grid-column:1/-1;color:var(--muted);font-size:11px}.score-formula{font-size:13px;color:var(--muted);margin:10px 0}.score-formula:empty{display:none}

@@ -10,9 +10,9 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
- get('content-metric').value='views';get('content-layout').value='cards';
+ get('content-metric').value='views';get('content-layout').value='cards';get('content-keep-metric').value='weighted_score';get('content-weight-views').value='1';get('content-weight-likes').value='10';
  return {context,get,requests,api:context.inspectContent};
 }
 const post={platform:'instagram',account_id:'acct',account_handle:'handle',post_id:'post1',published_at:'2026-10-01T12:00:00Z',metrics:{views:100,likes:1,comments:null,shares:0},caption:'caption',permalink:'https://www.instagram.com/p/example/'};
@@ -124,7 +124,7 @@ test('storage throttling automatically retries at most twice and stops when the 
 });
 
 test('keep strategy validation and server errors stay beside the plan controls and clear on retry',async()=>{
- const {api,get,context}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';
+ const {api,get,context}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';get('content-keep-metric').value='views';
  await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/explicit keep strategy/);assert.equal(get('content-keep-count').attributes['aria-invalid'],'true');assert.equal(get('content-error-cleanup').textContent,'');assert.equal(get('global-notice').textContent,'');
  get('content-keep-count').value='1';get('content-keep-strategy').value='best';get('content-keep-count').listeners.input();assert.equal(get('content-error-plan').textContent,'');assert.equal(get('content-keep-count').attributes['aria-invalid'],undefined);
  context.fetch=async()=>({status:400,ok:false,json:async()=>({error:'missing_metrics'})});await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/missing_metrics/);assert.equal(get('content-error-cleanup').textContent,'');
@@ -156,7 +156,7 @@ test('feedback opens its containing disclosure and comparison actions appear onl
 });
 
 test('changing keep controls ignores an obsolete pending plan error',async()=>{
- const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';get('content-keep-metric').value='views';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
  let finish;context.fetch=()=>new Promise(resolve=>{finish=resolve});const pending=get('content-plan').onclick();get('content-keep-count').value='2';get('content-keep-count').listeners.input();finish({status:400,ok:false,json:async()=>({error:'old_plan_error'})});await pending;assert.equal(get('content-error-plan').textContent,'');assert.equal(api.getPlan(),null);
 });
 
@@ -180,4 +180,49 @@ test('persisted decisions remain visible, platform filter separates accounts, an
  const {api,get}=setup();api.setView('cleanup');const g={group_id:'g',platform:'instagram',account_id:'acct',has_confirmed_history:true,members:[{...post,delete_status:'queued_clickouts',cleanup_review:{decision:'remove',queue_status:'queued_clickouts',removal_scheduled_at:null}},{...post,post_id:'p2',delete_status:'published',cleanup_review:{decision:'keep'}}]};api.setGroups([g,{...g,group_id:'fb',platform:'facebook',account_id:'different',members:[]}]);get('content-group-platform').value='instagram';api.renderGroupOptions();assert.ok(get('content-group').innerHTML.includes('Previously confirmed'));assert.ok(!get('content-group').innerHTML.includes('facebook'));get('content-group').value='0';api.renderContentGroup();
  assert.equal(api.groupDecision(g.members[0]).tone,'queued');assert.match(get('content-summary-g0').innerHTML,/Removal date not reported/);assert.match(get('content-summary-g1').innerHTML,/Kept in confirmed plan/);assert.equal(get('content-plan').disabled,true);
  api.setPlan({group_id:'g',keep:['p2'],remove:[post],expires_at:'2000-01-01T00:00:00Z'});api.updateGroupPresentation();assert.match(get('content-plan-notice').textContent,/expired/);assert.equal(api.groupDecision(g.members[0]).tone,'queued');assert.equal(api.removalTiming({queue_status:'deleted'}),'Deletion reported');assert.match(api.removalTiming({queue_status:'queued_clickouts',removal_scheduled_at:new Date(Date.now()+86400000*2).toISOString()}),/2d until scheduled removal/);
+});
+
+test('weighted score is the initial ranking and its cards reorder locally with raw metrics visible',()=>{
+ assert.match(html,/id="content-keep-metric"[^>]*><option value="weighted_score" selected>/);
+ const {api,get,requests}=setup();api.setGroups([{group_id:'g',members:[{...post,metrics:{views:1000,likes:1,comments:2,shares:0}},{...post,post_id:'p2',metrics:{views:400,likes:100,comments:0,shares:3}},{...post,post_id:'p3',metrics:{views:2000,likes:null}}]}]);get('content-group').value='0';api.renderContentGroup();
+ assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['p2','post1','p3']);
+ const card=get('content-summary-g1').innerHTML;for(const label of ['views','likes','comments','shares','Weighted score','1,400','Views × 1 + Likes × 10'])assert.ok(card.includes(label),label);
+ assert.match(get('content-summary-g2').innerHTML,/Unavailable/);
+ get('content-weight-views').value='3';get('content-weight-likes').value='1';get('content-weight-likes').listeners.input();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['post1','p2','p3']);assert.equal(requests.length,0);assert.equal(get('content-score-formula').textContent,'Views × 3 + Likes × 1');
+ get('content-group-order').value='metric-asc';api.updateGroupPresentation();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['p2','post1','p3'],'unavailable remains last in either order');
+});
+
+test('browser scores and backend scores agree for required, excluded and unavailable metrics',()=>{
+ const {api}=setup();const backend=vm.runInNewContext(fs.readFileSync(new URL('./content-ledger.js',import.meta.url),'utf8')+';({cleanupScore,cleanupScoreWeights})');
+ for(const weights of [{views:1,likes:10},{views:3,likes:1},{views:0,likes:10},{views:1,likes:0},{views:1000,likes:1000}])for(const metrics of [{views:400,likes:100},{views:0,likes:0},{views:0},{likes:3},{views:null,likes:2},{views:'20',likes:2},{views:Infinity,likes:1},{views:-1,likes:3},{views:Number.MAX_SAFE_INTEGER,likes:10}])assert.equal(api.contentWeightedScore(metrics,weights),backend.cleanupScore(metrics,backend.cleanupScoreWeights(weights)),JSON.stringify({metrics,weights}));
+});
+
+test('missing required metrics and invalid weights block planning with local feedback and no API call',async()=>{
+ const {api,get,requests}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post,{...post,post_id:'p2',metrics:{views:900}}]}]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
+ await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/1 post has no calculable weighted score/);assert.equal(get('global-notice').textContent,'');assert.equal(requests.length,0);
+ for(const value of ['', '-1','1001','1.5']){get('content-weight-likes').value=value;await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/whole-number score weights/);assert.equal(requests.length,0);assert.equal(get('content-score-settings').open,true);}
+ get('content-weight-likes').value='0';get('content-weight-views').value='0';await get('content-plan').onclick();assert.equal(requests.length,0);assert.match(get('content-error-plan').textContent,/at least one greater than zero/);
+});
+
+test('preview sends weights, shows the authoritative formula and invalidates on a weight edit',async()=>{
+ const {api,get,context,requests}=setup();api.setToken('private');api.setGroups([{group_id:'g',members:[post,{...post,post_id:'p2'}]}]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';get('content-weight-likes').value='20';
+ const plan={group_id:'g',plan_id:'p',metric:'weighted_score',keep:['post1'],remove:[{post_id:'p2'}],confirmation:'QUEUE 1 LINKS',expires_at:new Date(Date.now()+60000).toISOString(),ranking:{version:'weighted_v1',weights:{views:1,likes:20},formula:'Views × 1 + Likes × 20',values:[{post_id:'post1',value:120,inputs:{views:100,likes:1}},{post_id:'p2',value:120,inputs:{views:100,likes:1}}]}};
+ context.fetch=async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>plan}};
+ await api.previewContentPlan();assert.deepEqual(JSON.parse(requests[0].options.body).weights,{views:1,likes:20});assert.match(get('content-plan-detail').textContent,/weighted score \(Views × 1 \+ Likes × 20\)/);assert.equal(requests[0].path,'/api/content/plan');
+ get('content-confirm').value='QUEUE 1 LINKS';get('content-weight-likes').value='30';get('content-weight-likes').listeners.input();assert.equal(api.getPlan(),null);assert.equal(get('content-confirm').value,'');await api.confirmContentQueue();assert.equal(requests.length,1);
+ api.rememberConfirmedPlan(plan,{confirmed_at:'2026-11-15T12:00:00Z',status:'awaiting_sheet'});api.renderContentGroup();assert.match(get('content-summary-g0').innerHTML,/Confirmed score 120 · Views × 1 \+ Likes × 20/);assert.match(get('content-summary-g0').innerHTML,/Views × 1 \+ Likes × 30/,'current weights do not rewrite the confirmed score');
+});
+
+test('a weight change discards an in-flight plan and mismatched server weights cannot enable confirmation',async()=>{
+ const {api,get,context}=setup();api.setToken('private');api.setGroups([{group_id:'g',members:[post,{...post,post_id:'p2'}]}]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
+ let finish;context.fetch=()=>new Promise(resolve=>{finish=resolve});const pending=api.previewContentPlan();get('content-weight-likes').value='20';get('content-weight-likes').listeners.input();finish({status:200,ok:true,json:async()=>({plan_id:'obsolete'})});await pending;assert.equal(api.getPlan(),null);
+ context.fetch=async()=>({status:200,ok:true,json:async()=>({plan_id:'mismatch',keep:['post1'],remove:[{post_id:'p2'}],confirmation:'QUEUE 1 LINKS',ranking:{weights:{views:1,likes:10},formula:'Views × 1 + Likes × 10'}})});
+ await assert.rejects(api.previewContentPlan(),/score settings differ/);assert.equal(api.getPlan(),null);assert.equal(get('content-queue-confirm').disabled,true);
+});
+
+test('active plan cards and display sorting use backend score snapshots when stored metrics changed during preview',()=>{
+ const {api,get}=setup();api.setGroups([{group_id:'g',members:[post,{...post,post_id:'p2',metrics:{views:200,likes:10}}]}]);get('content-group').value='0';api.renderContentGroup();
+ api.setPlan({group_id:'g',metric:'weighted_score',keep:['post1'],remove:[{post_id:'p2'}],expires_at:new Date(Date.now()+60000).toISOString(),ranking:{weights:{views:1,likes:10},formula:'Views × 1 + Likes × 10',values:[{post_id:'post1',value:1500,inputs:{views:500,likes:100}},{post_id:'p2',value:300,inputs:{views:200,likes:10}}]}});
+ get('content-group-order').value='metric-desc';api.updateGroupPresentation();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['post1','p2']);const header=get('content-summary-g0').innerHTML;assert.match(header,/1,500/);assert.match(header,/<dt>views<\/dt><dd>500<\/dd>/);assert.match(header,/<dt>likes<\/dt><dd>100<\/dd>/);assert.match(header,/Plan snapshot/);
+ api.clearContentPlan();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['p2','post1']);assert.ok(!get('content-summary-g0').innerHTML.includes('Plan snapshot'));
 });

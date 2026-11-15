@@ -80,12 +80,16 @@ function groupReviewState(group,plans,queue){
   const removed=(d.remove||[]).map(x=>typeof x==='object'?x.post_id:x),kept=(d.keep||[]).map(x=>typeof x==='object'?x.post_id:x);
   const related=queue.filter(q=>q.platform===d.platform&&q.account_id===d.account_id&&removed.includes(q.post_id));
   const confirmed_at=d.confirmed_at||related.map(q=>q.created_at).filter(Boolean).sort().at(-1)||null;
-  history.push({kept,removed,confirmed_at,plan_id:p.plan_id});
+  history.push({kept,removed,confirmed_at,plan_id:p.plan_id,metric:d.metric||null,ranking:d.ranking||null});
  }
  history.sort((a,b)=>(a.confirmed_at||'').localeCompare(b.confirmed_at||'')||a.plan_id.localeCompare(b.plan_id));
  let prior=false;
  const members=group.members.map(post=>{
-  let decision=null;for(const h of history){if(h.kept.includes(post.post_id))decision={decision:'keep',confirmed_at:h.confirmed_at,plan_id:h.plan_id};if(h.removed.includes(post.post_id))decision={decision:'remove',confirmed_at:h.confirmed_at,plan_id:h.plan_id};}
+  let decision=null;for(const h of history){
+   const kind=h.removed.includes(post.post_id)?'remove':h.kept.includes(post.post_id)?'keep':null;if(!kind)continue;
+   const saved=h.ranking?.values?.find(x=>x.post_id===post.post_id);
+   decision={decision:kind,confirmed_at:h.confirmed_at,plan_id:h.plan_id,ranking:saved?{metric:h.metric,version:h.ranking.version,formula:h.ranking.formula,weights:h.ranking.weights,value:saved.value,inputs:saved.inputs}:null};
+  }
   const q=queue.find(q=>q.platform===post.platform&&q.account_id===post.account_id&&q.post_id===post.post_id);
   if(decision||q)prior=true;
   return {...post,cleanup_review:{...decision,queue_status:q?.status||null,queued_at:q?.created_at||null,removal_scheduled_at:null,schedule_status:'not_reported'}};
@@ -97,17 +101,31 @@ async function ingestGroups(env,groups){
  if(!Array.isArray(groups)||groups.length>10)throw Error('maximum_10_groups');
  await env.STORE.transact(['content_duplicate_groups','content_posts'],tx=>{for(const x of groups){const id=contentID(x.group_id),platform=contentPlatform(x.platform),account=contentID(x.account_id),ids=[...new Set((x.members||[]).map(contentID))];if(ids.length<2||ids.length>100||!['IMAGE','VIDEO'].includes(x.media_type)||JSON.stringify(x.evidence||{}).length>4000)throw Error('invalid_duplicate_group');const rows=tx.rows('content_posts').filter(r=>r.platform===platform&&r.account_id===account&&ids.includes(r.post_id));if(rows.length!==ids.length||rows.some(r=>(['VIDEO','REELS'].includes(r.media_type)?'VIDEO':r.media_type==='POST'&&r.fingerprint?JSON.parse(r.fingerprint).media_type:r.media_type)!==x.media_type))throw Error('mixed_or_missing_group_members');tx.put('content_duplicate_groups',{group_id:id,platform,account_id:account,media_type:x.media_type,algorithm:clean(x.algorithm,100),confidence:'candidate',members:JSON.stringify(ids.sort()),evidence:JSON.stringify(x.evidence||{}),updated_at:contentNow()});}});return {accepted:groups.length};
 }
-function rankDuplicateMembers(members,k,strategy,metric) {
+// A review preference, not a provider metric. Keep it out of metric ingestion/series.
+function cleanupScoreWeights(value){
+ const w=value===undefined?{views:1,likes:10}:value;
+ if(!w||typeof w!=='object'||Array.isArray(w)||Object.keys(w).length!==2||!['views','likes'].every(k=>Object.hasOwn(w,k)&&Number.isInteger(w[k])&&w[k]>=0&&w[k]<=1000)||w.views+w.likes===0)throw Error('invalid_score_weights');
+ return {views:w.views,likes:w.likes};
+}
+function cleanupScore(metrics,weights){
+ let score=0;for(const key of ['views','likes']){if(weights[key]===0)continue;const n=metrics?.[key];if(typeof n!=='number'||!Number.isFinite(n)||n<0)return null;score+=n*weights[key];}
+ return Number.isFinite(score)&&score<=Number.MAX_SAFE_INTEGER?score:null;
+}
+function rankDuplicateMembers(members,k,strategy,metric,requestedWeights) {
  if(!['best','worst'].includes(strategy))throw Error('explicit_keep_strategy_required');
  if(!Number.isInteger(k)||k<1||k>=members.length)throw Error('keep_count_must_be_between_1_and_n_minus_1');
- if(!CONTENT_METRICS.has(metric))throw Error('unsupported_ranking_metric');
- if(members.some(p=>!Number.isFinite(p.metrics?.[metric])||p.delete_status!=='published'))throw Error('missing_metrics_or_already_queued_member');
- const ranked=[...members].sort((a,b)=>strategy==='best'?b.metrics[metric]-a.metrics[metric]||a.post_id.localeCompare(b.post_id):a.metrics[metric]-b.metrics[metric]||a.post_id.localeCompare(b.post_id));
- return {keep:ranked.slice(0,k).map(p=>p.post_id),remove:ranked.slice(k),excluded_missing_metrics:[]};
+ const weighted=metric==='weighted_score';if(!weighted&&!CONTENT_METRICS.has(metric))throw Error('unsupported_ranking_metric');
+ const weights=weighted?cleanupScoreWeights(requestedWeights):null;
+ const values=members.map(p=>({post_id:p.post_id,value:weighted?cleanupScore(p.metrics,weights):p.metrics?.[metric],inputs:weighted?{views:p.metrics?.views??null,likes:p.metrics?.likes??null}:{[metric]:p.metrics?.[metric]??null}}));
+ if(values.some(p=>typeof p.value!=='number'||!Number.isFinite(p.value)||p.value<0)||members.some(p=>p.delete_status!=='published'))throw Error('missing_metrics_or_already_queued_member');
+ const byId=new Map(values.map(p=>[p.post_id,p.value]));
+ const ranked=[...members].sort((a,b)=>(strategy==='best'?byId.get(b.post_id)-byId.get(a.post_id):byId.get(a.post_id)-byId.get(b.post_id))||a.post_id.localeCompare(b.post_id));
+ const ranking={version:weighted?'weighted_v1':'single_metric_v1',weights,formula:weighted?'Views × '+weights.views+' + Likes × '+weights.likes:metric,values};
+ return {keep:ranked.slice(0,k).map(p=>p.post_id),remove:ranked.slice(k),excluded_missing_metrics:[],ranking};
 }
 async function planCleanup(env,b) {
  const group=await duplicateGroup(env,b.group_id);if(group.missing_members.length)throw Error('missing_group_members');
- const ranked=rankDuplicateMembers(group.members,b.keep_count,b.keep_strategy,b.metric);
+ const ranked=rankDuplicateMembers(group.members,b.keep_count,b.keep_strategy,b.metric,b.weights);
  const source_digest=await producerHash(JSON.stringify(group)),plan_id=crypto.randomUUID(),expires_at=new Date(Date.now()+600000).toISOString();
  const payload={...ranked,group_id:group.group_id,platform:group.platform,account_id:group.account_id,keep_count:b.keep_count,keep_strategy:b.keep_strategy,metric:b.metric,ranking_basis:'latest_observed_lifetime_total; publication_age_not_adjusted',confirmation:'QUEUE '+ranked.remove.length+' LINKS'};
  await env.STORE.put('content_cleanup_plans',{plan_id,group_id:group.group_id,payload:JSON.stringify(payload),source_digest,expires_at,committed:0});

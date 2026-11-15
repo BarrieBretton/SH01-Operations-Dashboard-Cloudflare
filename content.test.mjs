@@ -11,7 +11,7 @@ function setup(){
  function prepare(q){let a=[];return {bind(...v){a=v;return this},run(){return {meta:{changes:sql.prepare(q).run(...a).changes}}},all(){return {results:sql.prepare(q).all(...a)}},first(){return sql.prepare(q).get(...a)}}}
  const env={DB:{prepare,batch(a){sql.exec('BEGIN');try{const r=a.map(x=>x.run());sql.exec('COMMIT');return r}catch(e){sql.exec('ROLLBACK');throw e}}},GOOGLE_SHEETS_WRITE_ENABLED:'1'};
  const ctx={URL,Date,crypto:webcrypto,TextEncoder,console,JSON,Map,Set,Number,AbortSignal,clean:(s,n=500)=>String(s??'').slice(0,n),iso:s=>{const d=new Date(s);return Number.isNaN(+d)?null:d.toISOString()},producerURL:s=>s,json:x=>x,error:(m,s)=>({error:m,status:s}),producerHash:async s=>Array.from(new Uint8Array(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('')};
- attachStore(env,sql,ctx);vm.createContext(ctx);vm.runInContext(read('./content-ledger.js')+';globalThis.f={groupReviewState,canonicalPostURL,contentPreview,rankDuplicateMembers,upsertPosts,ingestGroups,planCleanup,queueCleanup,duplicateGroup,contentApi,mirrorContentSheets};',ctx);
+ attachStore(env,sql,ctx);vm.createContext(ctx);vm.runInContext(read('./content-ledger.js')+';globalThis.f={cleanupScoreWeights,cleanupScore,groupReviewState,canonicalPostURL,contentPreview,rankDuplicateMembers,upsertPosts,ingestGroups,planCleanup,queueCleanup,duplicateGroup,contentApi,mirrorContentSheets};',ctx);
  return {sql,env,c:ctx.f,ctx};
 }
 const post=(n,extra={})=>({platform:'instagram',account_id:'12345',post_id:String(n),permalink:'https://www.instagram.com/p/test'+n+'/',media_type:'IMAGE',metrics:{views:n*10},...extra});
@@ -98,4 +98,46 @@ test('history and queue annotations match exact platform and account, including 
  for(const other of [{platform:'facebook',account_id:'12345'},{platform:'instagram',account_id:'other'}]){
   const different={...g,...other,members:g.members.map(p=>({...p,...other}))};const clean=c.groupReviewState(different,[legacy],queue);assert.equal(clean.has_confirmed_history,false);assert.equal(clean.members[0].cleanup_review.decision,undefined);assert.equal(clean.members[1].cleanup_review.queue_status,null);
  }
+});
+
+test('weighted cleanup uses the default 1x views plus 10x likes, reverses for worst, and accepts explicit weights',async()=>{
+ const s=setup();await group(s);
+ for(const p of [post(1,{metrics:{views:1000,likes:1}}),post(2,{metrics:{views:400,likes:100}}),post(3,{metrics:{views:500,likes:0}}),post(4,{metrics:{views:500,likes:0}})])await s.c.upsertPosts(s.env,[p]);
+ const request={group_id:'g',keep_count:1,keep_strategy:'best',metric:'weighted_score'};
+ const best=await s.c.planCleanup(s.env,request);assert.deepEqual([...best.keep],['2']);assert.equal(best.ranking.formula,'Views × 1 + Likes × 10');assert.deepEqual(JSON.parse(JSON.stringify(best.ranking.weights)),{views:1,likes:10});
+ assert.equal(best.ranking.values.find(x=>x.post_id==='2').value,1400);
+ const worst=await s.c.planCleanup(s.env,{...request,keep_strategy:'worst'});assert.deepEqual([...worst.keep],['3'],'ties use deterministic post IDs');
+ const custom=await s.c.planCleanup(s.env,{...request,weights:{views:3,likes:1}});assert.deepEqual([...custom.keep],['1']);assert.equal(custom.ranking.values.find(x=>x.post_id==='1').value,3001);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);
+});
+
+test('weighted ranking distinguishes missing from zero and permits an explicitly excluded metric',()=>{
+ const {c}=setup(),a={post_id:'a',delete_status:'published',metrics:{views:0,likes:0}},b={post_id:'b',delete_status:'published',metrics:{views:1,likes:0}};
+ assert.deepEqual([...c.rankDuplicateMembers([a,b],1,'worst','weighted_score').keep],['a']);
+ for(const metrics of [{views:100},{likes:100},{views:100,likes:null},{views:100,likes:'10'},{views:100,likes:-1},{views:Infinity,likes:1},{views:Number.MAX_SAFE_INTEGER,likes:1}])assert.throws(()=>c.rankDuplicateMembers([a,{...b,metrics}],1,'best','weighted_score'),/missing_metrics/);
+ assert.deepEqual([...c.rankDuplicateMembers([a,{...b,metrics:{likes:8}}],1,'best','weighted_score',{views:0,likes:10}).keep],['b']);
+ assert.throws(()=>c.rankDuplicateMembers([a,{...b,delete_status:'awaiting_sheet'}],1,'best','weighted_score'),/already_queued/);
+});
+
+test('invalid score weights fail before saving a plan',async()=>{
+ const s=setup();await group(s);for(const weights of [null,[],{},'10',{views:1},{views:'1',likes:10},{views:-1,likes:10},{views:0,likes:0},{views:1.5,likes:10},{views:1001,likes:10},{views:NaN,likes:10},{views:1,likes:Infinity},{views:1,likes:10,shares:20}])await assert.rejects(s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'weighted_score',weights}),/invalid_score_weights/);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_cleanup_plans').get().n,0);
+});
+
+test('confirmed weighted decisions retain their inputs, score and formula across new sessions and later metrics',async()=>{
+ const s=setup();await group(s);await s.c.upsertPosts(s.env,[post(1,{metrics:{views:1000,likes:1}}),post(2,{metrics:{views:400,likes:100}}),post(3,{metrics:{views:0,likes:0}}),post(4,{metrics:{views:2,likes:0}})]);
+ const plan=await s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'weighted_score',weights:{views:1,likes:20}});
+ await s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation});
+ await s.c.upsertPosts(s.env,[post(2,{metrics:{views:5000,likes:800}})]);
+ const response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{}),member=response.rows[0].members.find(x=>x.post_id==='2');
+ assert.equal(member.metrics.likes,800);assert.equal(member.cleanup_review.decision,'keep');assert.equal(member.cleanup_review.ranking.value,2400);assert.equal(member.cleanup_review.ranking.formula,'Views × 1 + Likes × 20');assert.deepEqual(JSON.parse(JSON.stringify(member.cleanup_review.ranking.inputs)),{views:400,likes:100});
+ const saved=JSON.parse(s.sql.prepare('SELECT payload FROM content_cleanup_plans WHERE plan_id=?').get(plan.plan_id).payload);assert.equal(saved.ranking.weights.likes,20);assert.equal(saved.ranking.version,'weighted_v1');assert.ok(saved.confirmed_at);
+});
+
+test('weighted plans retain stale-metric protection and do not create provider metric observations',async()=>{
+ const s=setup();await group(s);for(let n=1;n<=4;n++)await s.c.upsertPosts(s.env,[post(n,{metrics:{views:100,likes:n}})]);
+ const plan=await s.c.planCleanup(s.env,{group_id:'g',keep_count:2,keep_strategy:'best',metric:'weighted_score'});
+ await s.c.upsertPosts(s.env,[post(4,{metrics:{views:100,likes:99}})]);
+ await assert.rejects(s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation}),/group_or_metrics_changed/);
+ assert.ok(s.sql.prepare('SELECT metrics FROM content_observations').all().every(x=>!Object.hasOwn(JSON.parse(x.metrics),'weighted_score')));
 });
