@@ -491,3 +491,98 @@ numeric/date Retry-After and authenticated runtime propagation. Existing tests
 cover stale atomic batches, lost responses, exclusive leases and duplicate queue
 identities. Live quota reduction and all-19-post matching require deployment and
 operator observation; no live scans or deletions were performed during validation.
+
+## Queue gallery and video thumbnail repair — 15 November 2026
+
+Operator-observed: Aand Cut now shows a 20-video candidate group and coverage of
+44/50 supported stored posts, with six pending. This confirms further scanner
+progress; it does not establish complete provider history. The deletion queue
+shows nine entries and mirror failure google_http_400. That generic error may
+originate in OAuth or a Sheets read; the screenshot does not identify which.
+Dashboard queue persistence is not confirmation of clickouts delivery or deletion.
+
+Code-confirmed causes: the deletion queue rendered only a table, and video cards
+had preload=none with no poster when their stored preview URL was the video.
+The collector already stores thumbnails in meta_content, but these were not
+joined into the library/group display. Meta preview refresh also dropped the
+thumbnail when returning the playable video source.
+
+The library, groups and queue now join thumbnails by exact platform, account and
+post identity. Those joins use their existing batched storage snapshots. The queue
+uses one snapshot for posts, account names, thumbnails, queue rows, mirror status
+and collected clickouts evidence, replacing separate reads. Queue status and
+queued timestamps remain authoritative. Unmapped Sheet links and missing/deleted
+posts show explicit unavailable states; no identity or thumbnail is guessed.
+
+Queued posts use the shared gallery with platform, metrics, status, queued time,
+information hover/pin, comments and original-post links. The detailed queue table
+is under a disclosure. Gallery IDs are distinct from group/library IDs. Nearby
+previews retain two-job concurrency and existing cooldowns, and lock clears the
+new gallery and prevents late media responses from repainting it.
+
+POST /api/content/poster uses the existing dashboard authentication and signed
+post ticket. It returns bounded, MIME-validated image bytes through the existing
+credential/workbook-scoped Worker cache. Stored valid thumbnails require no
+Sheets or Meta lookup. Expired/missing thumbnails may refresh once; an already
+refreshed playback descriptor is reused first. Unavailable thumbnails are cached
+for five minutes. A video response is cancelled rather than read as an image.
+Arbitrary client-supplied thumbnail URLs and cross-account tickets are refused.
+
+Thumbnail bytes reuse the encrypted browser cache, independently of video
+descriptors, for up to 24 hours within the existing size/count limits. They can
+survive reload and re-unlock with the same credential. Browsers without persistent
+storage retain a working fallback. The video element gets its source URL only
+when Play is clicked. A visible Play action and unavailable message replace blank
+idle players when a thumbnail cannot be obtained. Spinner and buffering state
+remain local to the card; a late thumbnail cannot cover an already playing video.
+
+No new bindings, secrets, storage schema, Render changes or scanner algorithm
+changes are required. This patch does not queue new clickouts, resend uncertain
+appends, execute deletion or repair the separate mirror failure.
+
+Validation: 231 JavaScript tests and four Python completion checks passed; built
+HTML has 179 unique IDs. Tests cover exact thumbnail identity, one-snapshot queue
+reads, expired/absent thumbnails, auth and cache isolation, reuse after reload,
+play-only video source assignment, lock races and buffering. Browser launch was
+blocked by the local environment's socket restriction, so real browser visual
+and playback verification remain an operator check after deployment.
+
+## Visible scan coverage and clear review states — 15 November 2026
+
+This is included in the combined queue/thumbnail patch before operator application.
+The duplicate workspace now has prominent overall and selected-account coverage
+cards with numeric percentages, coloured progress bars, fingerprinted/total counts
+and remaining counts. A disclosure lists coverage for all known Facebook and
+Instagram accounts, including those with no duplicate groups or no supported posts.
+Zero supported posts and unavailable coverage are shown explicitly, not as 100%.
+
+GET /api/content/groups adds scan_progress from its existing complete snapshot.
+Totals sum eligible and valid-fingerprinted stored posts across all supported
+accounts; the 20-group response limit, platform picker and repeated groups do not
+change these totals. Exact platform/account identities remain separate. No extra
+Sheets reads, background polls, storage schema or environment variables are added.
+Coverage measures saved fingerprints, not full provider history or guaranteed
+completion of comparison/group delivery. A failed refresh retains the previous
+coverage with an update-delayed label, and lock clears it.
+
+The candidate picker now displays account coverage bars alongside each group,
+with account names, media counts and prior confirmation history. The selection
+keeps the original group identity. It supports keyboard arrows, Home/End, typing,
+Enter/Space selection, Escape, Tab and outside dismissal; busy confirmation locks
+selection. Selection does not request scanning or queue removal links.
+
+Unreviewed cards have no redundant removal-state badge. Actual preview decisions
+show Marked for removal · preview (confirmation still required); queued decisions
+show Marked for removal · queued, and confirmed keeps remain visible. The action
+Scan this account sooner explains that it moves this account's remaining posts
+forward in the existing background queue. Earlier scan requested is an ordering
+acknowledgment, not a claim that scanning is running or that cooldown is bypassed.
+No scanner algorithm, scheduling, deletion or clickouts-write behavior changes.
+
+Validation: 237 JavaScript tests and four Python completion checks passed. Tests
+cover complete-catalogue totals despite the group limit, platform isolation, empty
+and unknown denominators, dropdown selection/keyboard handling, stale recovery,
+lock cleanup and proposed-versus-confirmed decisions, alongside the queue/poster
+checks. Parsed generated HTML has 188 unique IDs. Real-browser visual/accessibility
+and playback checks remain to be performed after deployment; Chromium launch in
+this environment was blocked during the earlier preview validation.

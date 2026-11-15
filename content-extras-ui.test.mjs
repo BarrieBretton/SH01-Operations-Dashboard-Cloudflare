@@ -46,3 +46,12 @@ test('encrypted images remain usable during a service cooldown with no preview A
  const h=setup();await h.c.persistentPostPreview(row);const fresh=setup(h.rows);vm.runInContext("postExtrasCooldown=Date.now()+120000;postExtrasWaitReason='storage';setPreviewWait(postExtrasCooldown,'storage')",fresh.c);const image=await fresh.c.persistentPostPreview(row);assert.equal(image.local_blob,true);assert.equal(fresh.requests(),0);
  await assert.rejects(fresh.c.persistentPostPreview({...row,post_id:'uncached'}),e=>e.deferred===true&&e.retryAt>Date.now()&&e.waitReason==='storage');assert.equal(fresh.requests(),0);
 });
+
+test('video thumbnail bytes survive reopening independently from the playable video descriptor',async()=>{
+ const h=setup(),video={...row,media_type:'VIDEO',preview_url:'https://cdn.test/clip.mp4',poster_url:'https://cdn.test/poster.jpg'};
+ const first=await h.c.persistentPostPreview(video,false,true);assert.equal(first.kind,'image');assert.equal(first.local_blob,true);assert.equal(h.requests(),1);
+ const reopened=setup(h.rows),again=await reopened.c.persistentPostPreview(video,false,true);assert.equal(again.local_blob,true);assert.equal(reopened.requests(),0);
+ reopened.c.fetch=async()=>Response.json({kind:'video',url:'https://cdn.test/clip.mp4',available:true});
+ assert.equal((await reopened.c.persistentPostPreview(video)).kind,'video');assert.equal(h.rows.size,2);
+ reopened.c.stopPostExtras(true);assert.ok(reopened.revoked.includes(again.url));
+});

@@ -69,7 +69,7 @@ test('groups endpoint uses one consistent snapshot for all groups and preserves 
  for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
  s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
  const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
- s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state']);return snapshot(tables)};
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content']);return snapshot(tables)};
  s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
  const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
  assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
@@ -185,4 +185,42 @@ test('account priority endpoint persists through real store transactions without
  await s.c.contentApi(req,s.env,{});assert.equal(s.sql.prepare("SELECT payload FROM content_collect_state WHERE id='similarity_scan'").get().payload,payload);
  const groups=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(groups.rows[0].scan_status.prioritized,true);assert.equal(groups.rows[0].scan_status.last_result,null);assert.equal(groups.rows[0].scan_coverage.pending,4);
  assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_cleanup_plans').get().n,0);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_sheet_outbox').get().n,before);
+});
+
+test('library and group video posters use stored thumbnails only for the exact platform/account/post',async()=>{
+ const s=setup();await group(s);
+ await s.c.upsertPosts(s.env,[post(1,{media_type:'VIDEO',preview_type:'video',preview_url:'https://a.cdninstagram.com/video.mp4'})]);
+ const insert=s.sql.prepare('INSERT INTO meta_content(id,asset_id,platform,kind,thumbnail_url,first_seen,last_seen) VALUES(?,?,?,?,?,?,?)');
+ insert.run('1','wrong','instagram','VIDEO','https://a.cdninstagram.com/wrong.jpg','now','now');
+ let data=await s.c.contentApi({url:'https://d.test/api/content',method:'GET'},s.env,{});assert.equal(data.rows.find(p=>p.post_id==='1').poster_url,'');
+ s.sql.prepare('UPDATE meta_content SET asset_id=?,thumbnail_url=? WHERE id=?').run('12345','https://a.cdninstagram.com/poster.jpg','1');
+ data=await s.c.contentApi({url:'https://d.test/api/content',method:'GET'},s.env,{});assert.equal(data.rows.find(p=>p.post_id==='1').poster_url,'https://a.cdninstagram.com/poster.jpg');
+ s.sql.prepare('UPDATE meta_content SET thumbnail_url=? WHERE id=?').run('https://a.cdninstagram.com/video.mp4?oe=123','1');
+ data=await s.c.contentApi({url:'https://d.test/api/content',method:'GET'},s.env,{});assert.equal(data.rows.find(p=>p.post_id==='1').poster_url,'');
+});
+test('queue previews and status come from one snapshot, preserve queue state and never guess an unmapped identity',async()=>{
+ const s=setup();s.sql.exec(read('./sheets-sync-schema.sql'));
+ await s.c.upsertPosts(s.env,[post(1,{preview_url:'https://a.cdninstagram.com/photo.jpg',preview_type:'image',caption:'Known caption'})]);
+ await s.env.STORE.put('content_deletion_queue',{request_id:'q1',platform:'instagram',account_id:'12345',post_id:'1',permalink:post(1).permalink,status:'awaiting_sheet',reason:'confirmed_duplicate_plan',created_at:'2026-11-15T13:42:00Z',updated_at:'now'});
+ await s.env.STORE.put('content_deletion_queue',{request_id:'q2',platform:'instagram',account_id:'999',post_id:'1',permalink:post(1).permalink,status:'awaiting_sheet',reason:'test',created_at:'2026-11-15T13:42:00Z',updated_at:'now'});
+ const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;s.env.STORE.snapshot=async t=>{reads++;return snapshot(t)};
+ const result=await s.c.contentApi({url:'https://d.test/api/content/queue',method:'GET'},s.env,{});assert.equal(reads,1);
+ const known=result.rows.find(r=>r.request_id==='q1'),unknown=result.rows.find(r=>r.request_id==='q2');
+ assert.equal(known.caption,'Known caption');assert.equal(known.metrics.views,10);assert.equal(known.status,'awaiting_sheet');assert.equal(known.created_at,'2026-11-15T13:42:00Z');assert.equal(known.preview_available,true);
+ assert.equal(unknown.preview_available,false);assert.equal(unknown.preview_url,undefined);assert.equal(unknown.caption,undefined);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,2);
+});
+
+test('overall scan coverage counts all stored accounts once, including accounts without groups, in the existing snapshot',async()=>{
+ const s=setup();await group(s);vm.runInContext(read('./scanner-automation.js'),s.ctx);
+ const fp={algorithm:'sh01-social-perceptual',version:1,media_type:'IMAGE',hashes:['123456789abcdef0'],gray_stddev:20};
+ await s.c.upsertPosts(s.env,[post(1,{fingerprint:fp}),post(5,{account_id:'99999',fingerprint:fp}),post(6,{account_id:'99999'}),post(7,{account_id:'99999'}),post(8,{account_id:'99999',media_type:'CAROUSEL'}),post(9,{platform:'facebook',permalink:'https://www.facebook.com/12345/posts/9',fingerprint:fp}),post(10,{platform:'facebook',permalink:'https://www.facebook.com/12345/posts/10',fingerprint:fp})]);
+ s.sql.prepare("UPDATE content_posts SET delete_status='deleted' WHERE platform='instagram' AND post_id='4'").run();
+ s.sql.prepare('INSERT INTO meta_assets(id,platform,name,updated_at) VALUES(?,?,?,?)').run('empty','instagram','Empty account','2026-11-15T00:00:00Z');
+ for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
+ const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;s.env.STORE.snapshot=names=>{reads++;return snapshot(names);};
+ const result=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(reads,1);assert.equal(result.rows.length,20);const p=result.scan_progress;
+ assert.deepEqual(JSON.parse(JSON.stringify(p.totals)),{eligible:8,fingerprinted:4,pending:4,accounts:4,accounts_with_posts:3,accounts_fingerprinted:1});assert.equal(p.full_history_verified,false);assert.equal(p.scope,'stored_supported_facebook_instagram_posts');
+ assert.equal(p.accounts.find(a=>a.account_id==='99999').eligible,3);assert.equal(p.accounts.find(a=>a.account_id==='empty').eligible,0);assert.equal(p.accounts.filter(a=>a.account_id==='12345').length,2);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);
 });

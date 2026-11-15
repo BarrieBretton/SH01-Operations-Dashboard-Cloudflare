@@ -59,7 +59,7 @@ async function contentRequest(path,body){
 }
 function contentQuery(){const q=new URLSearchParams({limit:'50',offset:String(contentOffset)});for(const [key,id] of [['platform','content-platform'],['account_id','content-account'],['q','content-search'],['from','content-from'],['to','content-to']])if($(id).value.trim())q.set(key,$(id).value.trim());return q}
 async function metaLoad(kind){return showContentView(kind==='capabilities'?'availability':kind==='compare'?'compare':kind==='cleanup'?'cleanup':'inventory')}
-async function showContentView(view){cancelCleanupRetry();stopAutoPreviews();for(const [key,c] of inflight)if(key.startsWith('content:')&&c.contentRead)c.abort();banner();contentView=view;renderContentErrors(view);for(const name of ['inventory','compare','cleanup','availability']){$('content-panel-'+name).classList.toggle('hidden',name!==view);$('content-nav-'+name).setAttribute('aria-selected',String(name===view));$('content-nav-'+name).setAttribute('tabindex',name===view?'0':'-1')}if(view==='inventory')await loadContent();else if(view==='compare')renderContentSelection();else if(view==='cleanup')await loadContentCleanup();else await loadContentAvailability()}
+async function showContentView(view){closeGroupPicker();cancelCleanupRetry();stopAutoPreviews();for(const [key,c] of inflight)if(key.startsWith('content:')&&c.contentRead)c.abort();banner();contentView=view;renderContentErrors(view);for(const name of ['inventory','compare','cleanup','availability']){$('content-panel-'+name).classList.toggle('hidden',name!==view);$('content-nav-'+name).setAttribute('aria-selected',String(name===view));$('content-nav-'+name).setAttribute('tabindex',name===view?'0':'-1')}if(view==='inventory')await loadContent();else if(view==='compare')renderContentSelection();else if(view==='cleanup')await loadContentCleanup();else await loadContentAvailability()}
 async function loadContent(more=false){
  if($('content-from').value&&$('content-to').value&&$('content-from').value>$('content-to').value)throw Error('Published from must be on or before Published through.');
  if(!more){contentOffset=0;contentHasMore=false}const d=await contentRequest('/api/content?'+contentQuery());const incoming=Array.isArray(d.rows)?d.rows:[];
@@ -104,30 +104,51 @@ function renderContentSelection(){const rows=[...contentSelection.values()];$('c
 function invalidateContentChart(){contentChartVersion++;contentSeries=[];contentChartSvg='';for(const id of ['content-chart','content-chart-legend','content-observations'])$(id).replaceChildren();$('content-chart-export').disabled=true;$('content-series-export').disabled=true;$('content-chart-status').textContent='Selection or metric changed. Load chart to see observations.'}
 function selectContent(index,checked){const row=contentVisible[index];if(!row)return;const key=contentKey(row);if(checked){if(contentSelection.size>=4&&!contentSelection.has(key)){setActionFeedback('content-error-selection','Select up to four posts.');renderContent();return}const first=contentSelection.values().next().value;if(first&&first.platform!==row.platform){setActionFeedback('content-error-selection','Compare posts on the same platform; clear the selection to change platforms.');renderContent();return}contentSelection.set(key,row)}else contentSelection.delete(key);invalidateContentChart();renderContent();setActionFeedback('content-error-selection','')}
 function safeContentMedia(value){try{const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port||u.href.length>5000)return '';const h=u.hostname.toLowerCase(),roots=['cdninstagram.com','fbcdn.net','tumblr.com'];if(!roots.some(root=>h===root||h.endsWith('.'+root)))return '';for(const k of u.searchParams.keys())if(/^(access_token|token|authorization|api_key|key|password|secret)$/i.test(k))return '';return u.href}catch{return ''}}
+async function renderVideoCover(box,media,row,descriptor,index,current){
+ const cover=document.createElement('div');cover.className='video-cover';
+ const play=document.createElement('button');play.className='btn video-play';play.textContent='▶ Play video';play.setAttribute('aria-label','Play video from '+contentAccountLabel(row));
+ const message=document.createElement('span');message.className='video-cover-message';cover.append(play);cover.append(message);box.append(cover);
+ let poster=null,started=false;
+ const reveal=()=>{if(!current())return;started=true;cover.hidden=true;if(poster)poster.hidden=true;clearPreviewLoading(box);};
+ const playing=media.onplaying;media.onplaying=()=>{playing?.();reveal();};
+ play.onclick=()=>{if(!current())return;started=true;box._videoBuffering=true;setPreviewLoading(box,'Buffering video…');cover.hidden=true;if(poster)poster.hidden=true;media.src=descriptor.url;const playing=media.play?.();playing?.catch(()=>{if(current()){started=false;box._videoBuffering=false;cover.hidden=false;if(poster)poster.hidden=false;clearPreviewLoading(box);message.textContent='Playback could not start. Try Play or open the original post.';}});};
+ try{
+  setPreviewLoading(box,'Loading video thumbnail…');
+  const d=row.extras_ticket&&typeof persistentPostPreview==='function'?await persistentPostPreview(row,false,true):{url:safeContentMedia(descriptor.poster||row.poster_url),kind:'image'};
+  if(!current())return;
+  const url=d.local_blob&&[...postObjectURLs.values()].some(v=>v.data.url===d.url)?d.url:safeContentMedia(d.url);
+  if(!url||d.kind!=='image'){message.textContent='Thumbnail unavailable. The video can still be played.';return;}
+  poster=document.createElement('img');poster.className='video-poster';poster.alt=contentAccountLabel(row)+' · video thumbnail';poster.referrerPolicy='no-referrer';poster.decoding='async';
+  const ready=waitForPreviewMedia(poster);poster.hidden=started;poster.src=url;box.append(poster);
+  const outcome=await ready;if(!current())return;
+  if(outcome!=='ready'){poster.hidden=true;message.textContent='Thumbnail could not load. Play the video or open the original post.';}
+ }catch(e){if(current())message.textContent='Thumbnail temporarily unavailable. Play the video or retry later.';}
+}
 async function performContentPreview(index,force=false){
  const row=previewRow(index),box=$('content-preview-'+index);if(!row||!box)return;
  const key=contentKey(row),epoch=authEpoch,generation=previewGeneration,owner={};box._previewOwner=owner;let closed=false,retrying=false;
  const current=()=>!closed&&box._previewOwner===owner&&epoch===authEpoch&&generation===previewGeneration&&contentKey(previewRow(index)||{})===key&&$('content-preview-'+index)===box;
- box.replaceChildren();setPreviewLoading(box,'Checking preview availability…');
+ box.replaceChildren();box._videoBuffering=false;setPreviewLoading(box,'Checking preview availability…');
  try{
   const d=await previewResponse(row,force);if(!current())return;
   const url=d.local_blob&&[...postObjectURLs.values()].some(v=>v.data.url===d.url)?d.url:safeContentMedia(d.url);if(!url||!['image','video'].includes(d.kind)){box.innerHTML='<div class="preview-placeholder">Preview unavailable or expired. '+link(row.permalink,'Open original post ↗')+'</div>';return}
   const media=document.createElement(d.kind==='video'?'video':'img');media.referrerPolicy='no-referrer';
   if(d.kind==='video'){
-   media.controls=true;media.preload='none';media.playsInline=true;if(safeContentMedia(d.poster))media.poster=d.poster;
-   media.onwaiting=media.onstalled=()=>{if(current())setPreviewLoading(box,'Buffering video…')};
-   media.onplaying=media.oncanplay=media.onpause=media.onended=()=>{if(current())clearPreviewLoading(box)};
+   media.controls=true;media.preload='none';media.playsInline=true;
+   media.onwaiting=media.onstalled=()=>{if(current()){box._videoBuffering=true;setPreviewLoading(box,'Buffering video…')}};
+   media.onplaying=media.oncanplay=media.onpause=media.onended=()=>{if(current()){box._videoBuffering=false;clearPreviewLoading(box)}};
   }else{media.alt=contentAccountLabel(row)+' · '+(row.media_type||'post');media.loading='eager';media.decoding='async';}
   let mediaFailed=false;media.onerror=()=>{mediaFailed=true;previewCache.delete(key);if(current()){clearPreviewLoading(box);if(d.kind==='video'){box.dataset.refreshPreview='1';box.innerHTML='<div class="preview-placeholder">Video unavailable or expired. '+link(row.permalink,'Open original ↗')+'<button class="btn" data-preview="'+index+'">Retry preview</button></div>';}}};
-  const ready=d.kind==='video'?Promise.resolve('ready'):waitForPreviewMedia(media);media.src=url;box.replaceChildren(media);setPreviewLoading(box,d.kind==='video'?'Loading video preview…':'Loading image…');
+  const ready=d.kind==='video'?Promise.resolve('ready'):waitForPreviewMedia(media);if(d.kind!=='video')media.src=url;box.replaceChildren(media);setPreviewLoading(box,d.kind==='video'?'Loading video preview…':'Loading image…');
   if(d.kind==='image'&&typeof media.cloneNode==='function'){const full=media.cloneNode();full.className='preview-full';full.alt='';full.setAttribute('aria-hidden','true');box.append(full);}
   const close=document.createElement('button');close.className='btn preview-close';close.textContent='Close preview';close.onclick=()=>{closed=true;clearPreviewLoading(box);media.removeAttribute('src');if(d.kind==='video')media.load();box.innerHTML='<div class="preview-placeholder"><button class="btn" data-preview="'+index+'">Reload preview</button><span class="preview-message">Media links may expire.</span></div>'};box.append(close);
+  if(d.kind==='video')await renderVideoCover(box,media,row,{...d,url},index,current);
   if(d.poster_only){const note=document.createElement('span');note.className='preview-video-note';note.textContent='Video poster · playback unavailable. Open the original post to watch.';box.append(note);}
   box.title=String(d.expires_warning||'Media links may expire; refresh to request a new preview.');const outcome=await ready;if(!current())return;
   if(outcome==='timeout'){clearPreviewLoading(box);closed=true;media.removeAttribute('src');if(d.kind==='video')media.load();box.innerHTML='<div class="preview-placeholder">Preview timed out. <button class="btn" data-preview="'+index+'">Retry preview</button>'+link(row.permalink,'Open original ↗')+'</div>';return;}
   if(mediaFailed){if(!force&&d.stored){box.dataset.refreshPreview='1';throw Object.assign(Error('Refreshing expired preview…'),{previewRetry:true,deferred:true})}box.innerHTML='<div class="preview-placeholder">Media unavailable. '+link(row.permalink,'Open original ↗')+'<button class="btn" data-preview="'+index+'">Retry preview</button></div>';}
  }catch(e){if(current()&&e.name!=='AbortError'){if(e.previewRetry){retrying=true;setPreviewLoading(box,previewWaitLabel({retryAt:e.retryAt||previewNextRequest,waitReason:e.waitReason||previewWaitReason}));throw e;}box.innerHTML='<div class="preview-placeholder">'+esc(e.message)+'<button class="btn" data-preview="'+index+'">Retry preview</button></div>';}}
- finally{if(current()&&!retrying)clearPreviewLoading(box);}
+ finally{if(current()&&!retrying&&!box._videoBuffering)clearPreviewLoading(box);}
 }
 function normalizeContentSeries(rows){const byTime=new Map();for(const row of rows||[]){const date=sourceDate(row.observed_at),value=contentNumber(row.value);if(date&&value!==null)byTime.set(+date,{observed_at:date.toISOString(),time:+date,value})}const sorted=[...byTime.values()].sort((a,b)=>a.time-b.time);return sorted.map((row,i)=>{const previous=sorted[i-1],delta=previous?row.value-previous.value:null;return {...row,interval_start:previous?.observed_at||null,interval_ms:previous?row.time-previous.time:null,delta,interpretation:delta===null?'First observation':delta<0?'Correction / reset':'Observed interval change'}})}
 async function loadContentChart(){const selected=[...contentSelection.values()],metric=$('content-metric').value;if(!selected.length||!contentChartMetrics.includes(metric))return;const generation=++contentChartVersion;contentSeries=[];contentChartSvg='';$('content-chart-export').disabled=true;$('content-series-export').disabled=true;$('content-chart').replaceChildren();$('content-observations').replaceChildren();$('content-chart-legend').replaceChildren();$('content-chart-status').textContent='Loading observed snapshots…';const results=await Promise.allSettled(selected.map(async row=>{const d=await contentRequest('/api/content/series?'+new URLSearchParams({platform:row.platform,account_id:row.account_id,post_id:row.post_id,metric}));return {post:row,rows:normalizeContentSeries(d.rows),metric,warning:[d.warning,d.truncated?'Series truncated to the first 2,000 stored observations. Later observations are omitted.':''].filter(Boolean).join(' ')}}));if(generation!==contentChartVersion||!token)return;contentSeries=results.map((r,i)=>r.status==='fulfilled'?r.value:{post:selected[i],rows:[],metric,warning:r.reason.name==='AbortError'?'Request interrupted':r.reason.message});renderContentChart()}
@@ -161,8 +182,9 @@ async function loadContentCleanup(automatic=false){
   if(epoch!==authEpoch||!token||contentView!=='cleanup'||$('meta-view').classList.contains('hidden'))return;
   const [groups,queue]=results;cleanupFresh=results.every(r=>r.status==='fulfilled');
   if(groups.status==='fulfilled'){
-   const selectedId=selectedContentGroup()?.group_id;contentGroups=groups.value.rows||[];renderGroupOptions(selectedId);renderContentGroup();
+   const selectedId=selectedContentGroup()?.group_id;contentGroups=groups.value.rows||[];contentScanProgressData=groups.value.scan_progress||null;contentScanProgressStale=false;renderGroupOptions(selectedId);renderContentGroup();
   }else{
+   contentScanProgressStale=true;renderScanProgress();closeGroupPicker();if(!contentGroups.length){$('content-group-picker-label').textContent='Groups temporarily unavailable';$('content-group-options').replaceChildren();contentPickerEntries=[];}
    $('content-plan').disabled=true;
    if(contentGroups.length)$('content-group-info').textContent='Showing previously loaded groups. Refresh failed; planning is paused until groups and queue are verified.';
    else{$('content-group').innerHTML='<option value="">Groups temporarily unavailable</option>';$('content-group-info').textContent='Groups could not be read. This does not mean no groups exist.';}
@@ -185,6 +207,66 @@ async function loadContentCleanup(automatic=false){
  try{return await pending}finally{if(cleanupLoad===pending)cleanupLoad=null;}
 }
 
+let contentScanProgressData=null,contentScanProgressStale=false,contentPickerEntries=[];
+function scanCoverageValue(c){
+ if(!c||!Number.isInteger(c.eligible)||!Number.isInteger(c.fingerprinted)||c.eligible<0||c.fingerprinted<0||c.fingerprinted>c.eligible)return null;
+ return {...c,pending:c.eligible-c.fingerprinted,percent:c.eligible?Math.floor(c.fingerprinted/c.eligible*1000)/10:null};
+}
+function scanMeter(c,label,mini=false){
+ const v=scanCoverageValue(c);if(!v||!v.eligible)return '';
+ const tone=v.pending?'partial':'complete';
+ return '<span class="scan-meter'+(mini?' scan-meter-mini':'')+'" data-tone="'+tone+'" '+(mini?'aria-hidden="true"':'role="progressbar" aria-label="'+esc(label)+'" aria-valuemin="0" aria-valuemax="'+v.eligible+'" aria-valuenow="'+v.fingerprinted+'" aria-valuetext="'+v.fingerprinted+' of '+v.eligible+' posts fingerprinted; '+v.percent+' percent"')+'><span style="width:'+v.percent+'%"></span></span>';
+}
+function scanCoverageMarkup(c,title){
+ const v=scanCoverageValue(c);
+ if(!v)return '<h3>'+esc(title)+'</h3><p class="sub">Coverage unavailable. Refresh groups to load it.</p>';
+ if(!v.eligible)return '<h3>'+esc(title)+'</h3><strong class="scan-percent">—</strong><p class="sub">No supported stored posts to analyse yet.</p>';
+ return '<div class="scan-heading"><h3>'+esc(title)+'</h3><strong class="scan-percent" data-tone="'+(v.pending?'partial':'complete')+'">'+v.percent+'<small>%</small></strong></div>'+scanMeter(v,title)+'<div class="scan-kpis"><span><strong>'+contentCount(v.fingerprinted)+' / '+contentCount(v.eligible)+'</strong>posts fingerprinted</span><span><strong>'+contentCount(v.pending)+'</strong>remaining</span></div>';
+}
+function renderScanProgress(){
+ const p=contentScanProgressData,c=p?.totals,group=selectedContentGroup(),stale=contentScanProgressStale;
+ $('content-scan-overall').innerHTML=scanCoverageMarkup(c,'Similarity scan coverage')+'<p class="sub">All Facebook &amp; Instagram accounts · includes accounts without duplicate groups.</p>'+(c?'<p class="sub">'+contentCount(c.accounts_fingerprinted)+' / '+contentCount(c.accounts_with_posts)+' accounts fully fingerprinted'+(c.accounts>c.accounts_with_posts?' · '+contentCount(c.accounts-c.accounts_with_posts)+' without supported stored posts':'')+'.</p>':'')+'<p class="scan-freshness'+(stale?' scan-delayed':'')+'">'+(stale?'Update delayed · showing last loaded coverage.':p?.checked_at?'Loaded '+esc(contentDate(p.checked_at)): 'Coverage has not loaded yet.')+'</p><p class="legend">Measures stored posts, not full account history. Matching groups may still be processing after fingerprints are saved.</p>';
+ const accounts=Array.isArray(p?.accounts)?p.accounts:[];
+ $('content-scan-accounts-details').hidden=!accounts.length;
+ $('content-scan-accounts').innerHTML=accounts.slice().sort((a,b)=>(a.platform+contentAccountLabel(a)).localeCompare(b.platform+contentAccountLabel(b))||String(a.account_id).localeCompare(String(b.account_id))).map(a=>{const v=scanCoverageValue(a),name=(contentPlatforms[a.platform]?.[0]||a.platform)+' · '+contentAccountLabel(a);return '<div class="scan-account-row"><strong>'+esc(name)+'</strong><span>'+(v?.eligible?v.percent+'% · '+v.fingerprinted+' / '+v.eligible+' posts fingerprinted':'No supported stored posts')+'</span>'+scanMeter(a,name)+'</div>';}).join('');
+ $('content-scan-selected').innerHTML=group?scanCoverageMarkup(group.scan_coverage,'Selected account')+'<p class="scan-account-name">'+platformBadge(group.platform)+' '+esc(contentAccountLabel(group))+'</p><p class="sub">Account coverage covers every stored supported post on this platform, across all its groups.</p>':'<h3>Selected account</h3><p class="sub">Choose a candidate group to see its account’s coverage.</p>';
+}
+function closeGroupPicker(restore=false){$('content-group-options').hidden=true;$('content-group-toggle').setAttribute('aria-expanded','false');if(restore)$('content-group-toggle').focus?.();}
+function pickerOptions(){return Array.from($('content-group-options').querySelectorAll?.('[role="option"]')||[]);}
+function openGroupPicker(){
+ if(contentQueueBusy||$('content-group-toggle').disabled)return;
+ $('content-group-options').hidden=false;$('content-group-toggle').setAttribute('aria-expanded','true');
+ const options=pickerOptions();(options.find(o=>o.getAttribute('aria-selected')==='true')||options[0])?.focus();
+}
+function syncGroupPicker(){
+ const selected=selectedContentGroup(),entry=contentPickerEntries.find(x=>x.i===Number($('content-group').value));
+ const c=scanCoverageValue(selected?.scan_coverage);
+ $('content-group-picker-label').textContent=selected&&entry?entry.label+(c?.eligible?' · '+c.percent+'% scanned':''):'Choose a group';
+ for(const option of pickerOptions())option.setAttribute('aria-selected',String(selected&&option.dataset.groupIndex===$('content-group').value));
+}
+function chooseContentGroup(index){
+ if(contentQueueBusy||$('content-group-toggle').disabled)return;
+ if(index!==''&&!contentPickerEntries.some(x=>String(x.i)===String(index)))return;
+ $('content-group').value=String(index);closeGroupPicker(true);clearContentPlan();syncGroupPicker();renderContentGroup();
+}
+let pickerTypeBuffer='',pickerTypeAt=0;
+function groupPickerKeydown(e){
+ if(e.key==='Escape'){e.preventDefault();closeGroupPicker(true);return;}
+ if(e.key==='Tab'){closeGroupPicker();return;}
+ const options=pickerOptions();if(!options.length)return;
+ const current=options.indexOf(e.target.closest?.('[role="option"]'));let next;
+ if(e.key==='ArrowDown')next=(current+1)%options.length;
+ else if(e.key==='ArrowUp')next=(current-1+options.length)%options.length;
+ else if(e.key==='Home')next=0;
+ else if(e.key==='End')next=options.length-1;
+ else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&e.key!==' '){
+  const now=Date.now();pickerTypeBuffer=(now-pickerTypeAt>800?'':pickerTypeBuffer)+e.key.toLowerCase();pickerTypeAt=now;
+  next=options.findIndex((_,j)=>{const i=(j+current+1)%options.length;return (options[i].getAttribute('data-search')||'').toLowerCase().startsWith(pickerTypeBuffer);});
+  next=next<0?undefined:(next+current+1)%options.length;
+ }
+ if(next!==undefined){e.preventDefault();options[next]?.focus();}
+}
+
 function selectedContentGroup(){const value=$('content-group').value;return value===''?null:contentGroups[Number(value)]}
 function contentScanCoverage(group){const c=group?.scan_coverage;return c?' Similarity coverage: '+c.fingerprinted+' / '+c.eligible+' supported posts fingerprinted; '+c.pending+' awaiting matching. Coverage is for stored posts.':'';}
 let contentScanRequest=null;
@@ -193,22 +275,22 @@ function renderAccountScan(){
  const pending=!!c&&(c.pending>0||s?.pending_batches>0);
  box.classList.toggle('loading-indicator',!!group&&contentScanRequest?.key===JSON.stringify([group.platform,group.account_id]));
  button.classList.toggle('hidden',!pending);button.disabled=!!contentScanRequest||!!s?.prioritized||s?.enabled===false;
- button.textContent=contentScanRequest?'Queuing account…':s?.prioritized?'Account prioritised':'Prioritise this account';
+ button.textContent=contentScanRequest?'Adding to scan queue…':s?.prioritized?'Earlier scan requested':'Scan this account sooner';
  if(!group){box.textContent='';return;}
  const r=s?.last_result;
- box.textContent=(s?.prioritized?'This account has catch-up priority. ':pending?'Analysis is incomplete; the displayed groups can grow. ':'')+(r?'Last batch for this account: '+contentDate(r.checked_at)+' · '+(r.fingerprints_saved||0)+' fingerprints saved'+(r.error?' · '+r.error:'')+'. ':pending?'No completed account batch is recorded by the updated scheduler yet. ':'')+(s?.pending_batches?s.pending_batches+' account batches awaiting retry. ':'')+(pending?'Background work continues with your browser closed. Refresh groups to read progress.':'');
+ box.textContent=(s?.enabled===false?'Automatic scanning is currently disabled. ':s?.prioritized?'Its remaining posts have been moved ahead in the background scan queue. ':pending?'Scanning runs automatically. This button moves this account’s remaining posts ahead in the queue. ':'')+(r?'Last saved batch: '+contentDate(r.checked_at)+' · '+(r.fingerprints_saved||0)+' posts'+(r.error?' · retry needed':'')+'. ':'')+(s?.pending_batches?'Some work is awaiting retry. ':'')+(pending&&s?.enabled!==false?'Existing waits and service limits still apply. You can close the browser; refresh groups to check progress.':'');
 }
 async function prioritizeContentAccount(){
  const group=selectedContentGroup();if(!group||contentScanRequest||!token)return;
  const epoch=authEpoch,key=JSON.stringify([group.platform,group.account_id]),request={epoch,key};contentScanRequest=request;renderAccountScan();
- const box=$('content-scan-notice');box.textContent='Queuing catch-up for this account…';box.classList.add('loading-indicator');
+ const box=$('content-scan-notice');box.textContent='Requesting an earlier background scan…';box.classList.add('loading-indicator');
  try{
   const result=await contentRequest('/api/content/scan',{platform:group.platform,account_id:group.account_id});
   if(epoch!==authEpoch||!token)return;
   for(const g of contentGroups){if(g.scan_status)g.scan_status.prioritized=false;if(JSON.stringify([g.platform,g.account_id])===key){g.scan_status=result.scan_status;g.scan_coverage=result.coverage;}}
-  renderAccountScan();
- }catch(e){if(epoch===authEpoch&&token&&e.name!=='AbortError'&&selectedContentGroup()&&JSON.stringify([selectedContentGroup().platform,selectedContentGroup().account_id])===key)box.textContent='Account catch-up could not be queued. '+e.message;}
- finally{if(contentScanRequest===request){contentScanRequest=null;box.classList.remove('loading-indicator');$('content-scan-account').disabled=!!selectedContentGroup()?.scan_status?.prioritized||selectedContentGroup()?.scan_status?.enabled===false;$('content-scan-account').textContent=selectedContentGroup()?.scan_status?.prioritized?'Account prioritised':'Prioritise this account';}}
+  syncGroupPicker();renderScanProgress();renderAccountScan();
+ }catch(e){if(epoch===authEpoch&&token&&e.name!=='AbortError'&&selectedContentGroup()&&JSON.stringify([selectedContentGroup().platform,selectedContentGroup().account_id])===key)box.textContent='The earlier scan could not be requested. '+e.message;}
+ finally{if(contentScanRequest===request){contentScanRequest=null;box.classList.remove('loading-indicator');$('content-scan-account').disabled=!!selectedContentGroup()?.scan_status?.prioritized||selectedContentGroup()?.scan_status?.enabled===false;$('content-scan-account').textContent=selectedContentGroup()?.scan_status?.prioritized?'Earlier scan requested':'Scan this account sooner';}}
 }
 function renderAutoScanStatus(s){const box=$('similarity-auto-status');if(!s){box.textContent='Automatic similarity matching status is unavailable.';return;}const r=s.last_result;box.textContent='Background similarity matching '+(s.enabled?'enabled':'disabled')+' · '+String(s.status||'awaiting first tick').replaceAll('_',' ')+(s.next_attempt?' · next check after '+contentDate(s.next_attempt):'')+(r?' · last batch: '+(r.fingerprints_saved||0)+' fingerprints saved'+(r.error?' · '+r.error:''):'')+' · '+s.pending_batches+' batches awaiting retry. Your browser can be closed.';}
 function contentGroupCount(group){
@@ -226,13 +308,20 @@ function renderGroupOptions(selectedId=selectedContentGroup()?.group_id){
  const buckets=new Map();for(const item of visible){const key=JSON.stringify([item.g.platform,item.g.account_id]);if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push(item);}
  const bucketsSorted=[...buckets.values()].sort((a,b)=>(a[0].g.platform+contentAccountLabel(a[0].g)).localeCompare(b[0].g.platform+contentAccountLabel(b[0].g))||String(a[0].g.account_id).localeCompare(String(b[0].g.account_id)));
  const usedNames=new Map();for(const items of bucketsSorted){const g=items[0].g,label=(contentPlatforms[g.platform]?.[0]||g.platform)+' · '+contentAccountLabel(g);usedNames.set(label,(usedNames.get(label)||0)+1);}
- const collisions=new Map();
+ const collisions=new Map();contentPickerEntries=[];const visual=[];
  $('content-group').innerHTML='<option value="">'+(visible.length?'Choose a group':'No groups loaded for this platform')+'</option>'+bucketsSorted.map(items=>{
   const first=items[0].g,base=(contentPlatforms[first.platform]?.[0]||first.platform)+' · '+contentAccountLabel(first);let label=base;
   if(usedNames.get(base)>1){const n=(collisions.get(base)||0)+1;collisions.set(base,n);label+=' · Account '+n;}
-  return '<optgroup label="'+esc(label)+'">'+items.slice().sort((a,b)=>numbers.get(a.g.group_id)-numbers.get(b.g.group_id)).map(({g,i})=>'<option value="'+i+'">'+esc(label+' · Group '+numbers.get(g.group_id)+' · '+contentGroupCount(g)+(g.has_confirmed_history?' · Previously confirmed':''))+'</option>').join('')+'</optgroup>';
+  const sorted=items.slice().sort((a,b)=>numbers.get(a.g.group_id)-numbers.get(b.g.group_id));
+  visual.push('<div role="group" aria-label="'+esc(label)+'"><div class="group-picker-heading" aria-hidden="true">'+esc(label)+'</div>'+sorted.map(({g,i})=>{
+   const text=label+' · Group '+numbers.get(g.group_id)+' · '+contentGroupCount(g)+(g.has_confirmed_history?' · Previously confirmed':''),c=scanCoverageValue(g.scan_coverage);contentPickerEntries.push({i,label:text});
+   const coverage=c?.eligible?'Account coverage · '+c.percent+'% · '+c.fingerprinted+' / '+c.eligible+' posts fingerprinted':c?'No supported stored posts':'Account coverage unavailable';
+   return '<button type="button" role="option" tabindex="-1" data-group-index="'+i+'" data-search="'+esc(contentAccountLabel(g)+' '+label)+'" aria-selected="'+String(g.group_id===selectedId)+'"><span class="group-option-name">'+esc(text)+'</span><span class="group-option-coverage">'+esc(coverage)+'</span>'+scanMeter(c,label,true)+'</button>';
+  }).join('')+'</div>');
+  return '<optgroup label="'+esc(label)+'">'+sorted.map(({g,i})=>'<option value="'+i+'">'+esc(label+' · Group '+numbers.get(g.group_id)+' · '+contentGroupCount(g)+(g.has_confirmed_history?' · Previously confirmed':''))+'</option>').join('')+'</optgroup>';
  }).join('');
  const match=visible.find(({g})=>g.group_id===selectedId);$('content-group').value=match?String(match.i):'';
+ $('content-group-options').innerHTML=visual.join('')||'<p class="sub">No groups loaded for this platform.</p>';closeGroupPicker();syncGroupPicker();
 }
 
 function removalTiming(review){
@@ -248,12 +337,12 @@ function groupDecision(row){
  const active=plan&&(!plan.group_id||plan.group_id===group?.group_id)&&Date.parse(plan.expires_at)>Date.now();
  const id=x=>typeof x==='object'?x.post_id:x;
  if(active&&(plan.keep||[]).map(id).includes(row.post_id))return {tone:'keep',label:'Keep · proposed',detail:'Not yet confirmed'};
- if(active&&(plan.remove||[]).map(id).includes(row.post_id))return {tone:'remove',label:'Remove · proposed',detail:'Not queued; confirmation required'};
+ if(active&&(plan.remove||[]).map(id).includes(row.post_id))return {tone:'remove',label:'Marked for removal · preview',detail:'Not queued; confirmation required'};
  const status=review.queue_status||row.delete_status;
- if(status&&status!=='published'&&status!=='Stored')return {tone:'queued',label:status==='deleted'?'Deletion reported':'Removal state · '+status.replaceAll('_',' '),detail:removalTiming({...review,queue_status:status})};
+ if(status&&status!=='published'&&status!=='Stored')return {tone:'queued',label:status==='deleted'?'Deletion reported':'Marked for removal · queued',detail:queueStatusLabel({status})+' · '+removalTiming({...review,queue_status:status})};
  if(review.decision==='keep')return {tone:'keep',label:'Kept in confirmed plan',detail:'Previously confirmed'+(review.confirmed_at?' · '+contentDate(review.confirmed_at):'')};
- if(review.decision==='remove')return {tone:'queued',label:'Removal previously confirmed',detail:removalTiming(review)};
- return {tone:'neutral',label:'Not marked for removal',detail:contentPlan?'Preview expired or changed; create a new preview.':''};
+ if(review.decision==='remove')return {tone:'queued',label:'Marked for removal · confirmed',detail:removalTiming(review)};
+ return {tone:'neutral',label:'',detail:''};
 }
 function contentScoreWeights(){
  const weights={};for(const key of ['views','likes']){const text=$('content-weight-'+key).value.trim();if(!text)return null;const n=Number(text);if(!Number.isInteger(n)||n<0||n>1000)return null;weights[key]=n;}
@@ -293,12 +382,12 @@ function orderedGroupEntries(){
  });
 }
 function gallerySummary(row,index,rank){
- const group=String(index).startsWith('g'),decision=group?groupDecision(row):(row.delete_status&&row.delete_status!=='published'?{tone:'queued',label:'Removal state · '+row.delete_status.replaceAll('_',' '),detail:removalTiming({queue_status:row.delete_status})}:null),metric=group?$('content-keep-metric').value:'';
+ const group=String(index).startsWith('g'),queued=String(index).startsWith('q'),decision=queued?{tone:'queued',label:queueStatusLabel(row),detail:'Queued '+contentDate(row.created_at)+' · '+(row.reason==='confirmed_duplicate_plan'?'Confirmed duplicate removal plan':row.reason||'No reason recorded')}:group?groupDecision(row):(row.delete_status&&row.delete_status!=='published'?{tone:'queued',label:'Removal state · '+row.delete_status.replaceAll('_',' '),detail:removalTiming({queue_status:row.delete_status})}:null),metric=group?$('content-keep-metric').value:'';
  const metrics=metric&&metric!=='weighted_score'&&!contentMetrics.includes(metric)?[...contentMetrics,metric]:contentMetrics;
  const saved=group?activeGroupRanking(row):null,displayMetrics={...row.metrics,...saved?.inputs};
  const weights=contentScoreWeights(),score=contentNumber(saved?.value)??contentWeightedScore(displayMetrics,weights),scoreCell=group&&metric==='weighted_score'?'<div class="rank-metric gallery-score"><dt>Weighted score</dt><dd>'+esc(score===null?'Unavailable':contentCount(score))+'</dd><small>'+esc(weights?contentScoreFormula(weights):'Check score settings')+(saved?' · Plan snapshot':'')+'</small></div>':'';
  const recorded=group?recordedScoreText(row.cleanup_review):'';
- return '<div class="gallery-summary-top">'+platformBadge(row.platform)+(group?'<span class="review-rank">Display #'+rank+'</span>':'')+'</div><dl class="gallery-metrics">'+metrics.map(m=>'<div'+(m===metric?' class="rank-metric"':'')+'><dt>'+esc(m.replaceAll('_',' '))+'</dt><dd>'+esc(contentCount(displayMetrics[m]))+'</dd></div>').join('')+scoreCell+'</dl>'+(decision?'<div class="gallery-decision" data-tone="'+decision.tone+'"><strong>'+esc(decision.label)+'</strong><span>'+esc(decision.detail)+'</span>'+(recorded?'<span>'+esc(recorded)+'</span>':'')+'</div>':'');
+ return '<div class="gallery-summary-top">'+platformBadge(row.platform)+(queued?'<span class="queue-account">'+esc(contentAccountLabel(row))+'</span>':'')+(group?'<span class="review-rank">Display #'+rank+'</span>':'')+'</div><dl class="gallery-metrics">'+metrics.map(m=>'<div'+(m===metric?' class="rank-metric"':'')+'><dt>'+esc(m.replaceAll('_',' '))+'</dt><dd>'+esc(contentCount(displayMetrics[m]))+'</dd></div>').join('')+scoreCell+'</dl>'+(decision?.label?'<div class="gallery-decision" data-tone="'+decision.tone+'"><strong>'+esc(decision.label)+'</strong><span>'+esc(decision.detail)+'</span>'+(recorded?'<span>'+esc(recorded)+'</span>':'')+'</div>':'');
 }
 function updateGroupPresentation(){
  updateScoreSettings();
@@ -324,7 +413,7 @@ function rememberConfirmedPlan(plan,result){
  renderGroupOptions(group.group_id);cleanupFresh=false;updateGroupPresentation();
 }
 
-function renderContentGroup(){stopAutoPreviews();const group=selectedContentGroup();contentGroupRows=(group?.members||[]).map(r=>({...r,platform:r.platform||group.platform,account_id:r.account_id||group.account_id,media_type:group.media_type==='VIDEO'?'VIDEO':r.media_type,_groupEvidence:group.algorithm||'Similarity candidate'}));$('content-group-evidence').textContent=group?JSON.stringify({platform:group.platform,account_id:group.account_id,group_id:group.group_id,account_name_source:group.account_name_source||'stored_post',algorithm:group.algorithm||null,confidence:group.confidence??null,evidence:group.evidence||{}},null,2):'No group selected.';$('content-group-cards').innerHTML=contentGroupRows.map((r,i)=>contentGalleryCard(r,'g'+i)).join('');$('content-group-info').textContent=group?(contentPlatforms[group.platform]?.[0]||group.platform)+' · '+contentAccountLabel(group)+' · '+contentGroupCount(group)+'. '+(group.has_confirmed_history?'Previously confirmed decisions are shown on the cards. ':'')+(group.platform==='instagram'&&group.account_name_source!=='instagram_profile'?(contentAccountLabel(group)==='Account name unavailable'?'Account name has not been collected yet. ':'Stored account label; the Instagram username updates after successful Meta discovery. '):'')+((group.missing_members||[]).length?' '+group.missing_members.length+' missing members; planning is blocked.':'')+contentScanCoverage(group):'No group selected.';$('content-group-members').innerHTML=(group?.members||[]).map(r=>'<tr><td>'+platformBadge(r.platform||group.platform)+'<div>'+esc(contentAccountLabel({...r,platform:r.platform||group.platform,account_id:r.account_id||group.account_id}))+'</div><strong>'+esc(r.post_id)+'</strong></td><td>'+esc(r.media_type||group.media_type||'Unknown media')+'<div class="sub">'+esc((r.caption||'No caption').slice(0,180))+'</div></td><td>'+esc(contentDate(r.published_at))+'</td><td>'+contentMetricCells(r)+'</td><td>'+link(r.permalink,'Review post ↗')+'</td></tr>').join('');$('content-plan').disabled=!group||!cleanupFresh||Boolean(group?.missing_members?.length)||(group?.members||[]).some(r=>r.cleanup_review?.queue_status||(r.delete_status&&r.delete_status!=='published'));updateGroupPresentation();renderAccountScan();if(contentView==='cleanup')startAutoPreviews();}
+function renderContentGroup(){stopAutoPreviews();const group=selectedContentGroup();contentGroupRows=(group?.members||[]).map(r=>({...r,platform:r.platform||group.platform,account_id:r.account_id||group.account_id,media_type:group.media_type==='VIDEO'?'VIDEO':r.media_type,_groupEvidence:group.algorithm||'Similarity candidate'}));$('content-group-evidence').textContent=group?JSON.stringify({platform:group.platform,account_id:group.account_id,group_id:group.group_id,account_name_source:group.account_name_source||'stored_post',algorithm:group.algorithm||null,confidence:group.confidence??null,evidence:group.evidence||{}},null,2):'No group selected.';$('content-group-cards').innerHTML=contentGroupRows.map((r,i)=>contentGalleryCard(r,'g'+i)).join('');$('content-group-info').textContent=group?(contentPlatforms[group.platform]?.[0]||group.platform)+' · '+contentAccountLabel(group)+' · '+contentGroupCount(group)+'. '+(group.has_confirmed_history?'Previously confirmed decisions are shown on the cards. ':'')+(group.platform==='instagram'&&group.account_name_source!=='instagram_profile'?(contentAccountLabel(group)==='Account name unavailable'?'Account name has not been collected yet. ':'Stored account label; the Instagram username updates after successful Meta discovery. '):'')+((group.missing_members||[]).length?' '+group.missing_members.length+' missing members; planning is blocked.':''):'No group selected.';$('content-group-members').innerHTML=(group?.members||[]).map(r=>'<tr><td>'+platformBadge(r.platform||group.platform)+'<div>'+esc(contentAccountLabel({...r,platform:r.platform||group.platform,account_id:r.account_id||group.account_id}))+'</div><strong>'+esc(r.post_id)+'</strong></td><td>'+esc(r.media_type||group.media_type||'Unknown media')+'<div class="sub">'+esc((r.caption||'No caption').slice(0,180))+'</div></td><td>'+esc(contentDate(r.published_at))+'</td><td>'+contentMetricCells(r)+'</td><td>'+link(r.permalink,'Review post ↗')+'</td></tr>').join('');$('content-plan').disabled=!group||!cleanupFresh||Boolean(group?.missing_members?.length)||(group?.members||[]).some(r=>r.cleanup_review?.queue_status||(r.delete_status&&r.delete_status!=='published'));updateGroupPresentation();syncGroupPicker();renderScanProgress();renderAccountScan();renderQueueGallery();if(contentView==='cleanup')startAutoPreviews();}
 function clearContentPlan(invalidate=true){clearContentFeedback('content-error-plan');$('content-plan-notice').textContent='';for(const id of ['content-keep-count','content-keep-strategy','content-weight-views','content-weight-likes'])$(id).removeAttribute('aria-invalid');if(invalidate)contentPlanVersion++;contentPlan=null;$('content-plan-panel').classList.add('hidden');$('content-plan-records').replaceChildren();$('content-plan-title').textContent='Review removal plan';$('content-plan-detail').textContent='';$('content-confirm').value='';$('content-queue-confirm').disabled=true;updateGroupPresentation()}
 async function previewContentPlan(){
  clearContentPlan();clearContentFeedback('content-error-plan');if(!cleanupFresh)throw Error('Refresh groups and queue successfully before planning.');
@@ -345,23 +434,34 @@ async function previewContentPlan(){
  $('content-plan-detail').textContent=eligible+' eligible members − '+keepIds.length+' retained = '+removed.length+' proposed removals · '+(strategy==='best'?'highest':'lowest')+' '+(metric==='weighted_score'?'weighted score ('+plan.ranking.formula+')':metric)+' retained. '+(plan.excluded_missing_metrics||[]).length+' missing-metric members excluded. Plan expires '+contentDate(plan.expires_at)+'.';
  $('content-plan-records').replaceChildren();updateGroupPresentation();$('content-confirm-label').textContent='Type '+plan.confirmation+' to confirm';$('content-plan-panel').classList.remove('hidden');$('content-plan-notice').textContent='Preview only: keep '+keepIds.length+' · propose '+removed.length+' removals. The cards show the exact decisions. No links have been queued.';updateContentConfirmation();
 }
-function setContentQueueBusy(busy){contentQueueBusy=busy;for(const id of ['content-group','content-group-platform','content-group-order','content-keep-strategy','content-keep-count','content-keep-metric','content-weight-views','content-weight-likes','content-confirm','content-plan-cancel','content-cleanup-refresh','content-plan'])$(id).disabled=busy;if(!busy)$('content-plan').disabled=!cleanupFresh||!selectedContentGroup()||Boolean(selectedContentGroup()?.missing_members?.length)||(selectedContentGroup()?.members||[]).some(r=>r.cleanup_review?.queue_status||(r.delete_status&&r.delete_status!=='published'));updateContentConfirmation()}
+function setContentQueueBusy(busy){contentQueueBusy=busy;if(busy)closeGroupPicker();for(const id of ['content-group','content-group-toggle','content-group-platform','content-group-order','content-keep-strategy','content-keep-count','content-keep-metric','content-weight-views','content-weight-likes','content-confirm','content-plan-cancel','content-cleanup-refresh','content-plan'])$(id).disabled=busy;if(!busy)$('content-plan').disabled=!cleanupFresh||!selectedContentGroup()||Boolean(selectedContentGroup()?.missing_members?.length)||(selectedContentGroup()?.members||[]).some(r=>r.cleanup_review?.queue_status||(r.delete_status&&r.delete_status!=='published'));updateContentConfirmation()}
 function updateContentConfirmation(){const valid=contentPlan&&contentPlan.remove?.length>0&&$('content-confirm').value===contentPlan.confirmation,expires=contentPlan&&sourceDate(contentPlan.expires_at);$('content-queue-confirm').disabled=contentQueueBusy||!valid||!expires||+expires<=Date.now()}
 async function confirmContentQueue(){clearContentFeedback('content-error-confirm');updateContentConfirmation();if($('content-queue-confirm').disabled)return;setContentQueueBusy(true);const finishLoading=beginDeskLoading('content-confirm-loading','Confirming links and refreshing queue status…',['content-queue-confirm']);const plan=contentPlan,generation=contentPlanVersion;try{const d=await contentRequest('/api/content/queue',{plan_id:plan.plan_id,confirmation:$('content-confirm').value});if(generation!==contentPlanVersion)return;rememberConfirmedPlan(plan,d);clearContentPlan();$('content-confirm-notice').textContent='Queue request accepted. Refreshing queue status…';const queue=await contentRequest('/api/content/queue');contentQueue=queue.rows||[];renderContentQueue(queue);updateGroupPresentation();$('content-confirm-notice').textContent=d.warning||'Links queued. Queue status below reports stored state; it does not prove deletion has occurred.'}catch(e){if(e.name!=='AbortError'&&token){clearContentPlan();$('content-confirm-notice').textContent='The queue outcome could not be verified. Refresh the queue before creating another plan.'}throw e}finally{finishLoading();setContentQueueBusy(false);updateContentConfirmation();updateGroupPresentation()}}
-function renderContentQueue(data){const sheet=data.sheet_status,mirror=sheet?.mirror,summary=typeof sheet==='string'?sheet:mirror?.status||sheet?.status||'Unknown / not reported';$('content-queue-status').textContent=contentQueue.length+' returned requests'+(data.limit?' · at most '+data.limit+' latest stored requests':'')+' · clickouts Sheet mirror: '+summary+(mirror?.last_success?' · last success '+contentDate(mirror.last_success):'')+(mirror?.error_code?' · '+mirror.error_code:'')+'. A queued link is not a verified deletion.';$('content-queue').innerHTML=contentQueue.length?contentQueue.map((r,i)=>'<tr><td>'+platformBadge(r.platform)+'<div>'+esc(contentAccountLabel(r))+'</div><strong>'+esc(r.post_id)+'</strong></td><td>'+contentState(r.status)+(r.checked_at&&Date.now()-Date.parse(r.checked_at)>86400000?' · stale':'')+'</td><td>'+esc(r.reason||'—')+'</td><td>'+esc(contentDate(r.created_at))+'</td><td>'+link(r.permalink,'Review post ↗')+postCommentWidget(r,'queue-'+i,true)+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No deletion requests stored.</td></tr>'}
+function queueStatusLabel(row){return ({awaiting_sheet:'Waiting for Sheet sync',queued_clickouts:'Sent to clickouts Sheet',sheet_listed_unverified:'Sheet link · identity unverified',deleted:'Recorded as deleted',failed:'Removal reported failed'})[row.status]||String(row.status||'Status unknown').replaceAll('_',' ');}
+function renderQueueGallery(){
+ previewQueue=previewQueue.filter(job=>{if(!String(job.index).startsWith('q'))return true;job.resolve();return false;});
+ $('content-queue-cards').innerHTML=contentQueue.length?contentQueue.map((row,i)=>contentGalleryCard({...row,preview_available:row.preview_available!==false&&!!row.post_id&&!!row.account_id},'q'+i)).join(''):'<p class="sub">No deletion requests stored.</p>';
+}
+function renderContentQueue(data){const sheet=data.sheet_status,mirror=sheet?.mirror,summary=typeof sheet==='string'?sheet:mirror?.status||sheet?.status||'Unknown / not reported';$('content-queue-status').textContent=contentQueue.length+' returned requests'+(data.limit?' · at most '+data.limit+' latest stored requests':'')+' · clickouts Sheet mirror: '+summary+(mirror?.last_success?' · last success '+contentDate(mirror.last_success):'')+(mirror?.error_code?' · '+mirror.error_code:'')+'. A queued link is not a verified deletion.';$('content-queue').innerHTML=contentQueue.length?contentQueue.map((r,i)=>'<tr><td>'+platformBadge(r.platform)+'<div>'+esc(contentAccountLabel(r))+'</div><strong>'+esc(r.post_id)+'</strong></td><td>'+contentState(r.status)+(r.checked_at&&Date.now()-Date.parse(r.checked_at)>86400000?' · stale':'')+'</td><td>'+esc(r.reason||'—')+'</td><td>'+esc(contentDate(r.created_at))+'</td><td>'+link(r.permalink,'Review post ↗')+postCommentWidget(r,'queue-'+i,true)+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No deletion requests stored.</td></tr>';renderQueueGallery();if(contentView==='cleanup')startAutoPreviews();}
 async function loadContentAvailability(){const extraEpoch=authEpoch;try{await refreshMetaProgress();await loadMetaCoverage();}catch(e){if(e.name==='AbortError'||extraEpoch!==authEpoch)return;$('meta-progress').textContent='Meta progress unavailable: '+e.message;}const epoch=authEpoch;const results=await Promise.allSettled([contentRequest('/api/content/status'),contentRequest('/api/meta/assets'),contentRequest('/api/meta/capabilities')]);if(!token||epoch!==authEpoch)return;const [statusResult,assetsResult,capabilitiesResult]=results;if(statusResult.status==='fulfilled'){const d=statusResult.value,mirror=d.mirror||{},outbox=(d.outbox||[]).map(x=>x.status+': '+x.count).join(' · ');$('content-system-status').innerHTML=[['Content storage',d.schema_ready?'Ready':'Migration required',d.schema_ready?'Google Sheets storage is available.':'Complete the Sheets storage migration.'],['Optional mapping/cleanup writes',d.sheet_write_enabled?'Enabled':'Disabled','Post mapping: '+(d.post_sheet||'meta-posts-to-id')+' · queue: '+(d.clickouts_sheet||'clickouts')+'. Google credentials also need Sheets write scope.'],['Sheet mirror',mirror.status||'Unknown','Last success: '+contentDate(mirror.last_success)+' · last attempt: '+contentDate(mirror.last_attempt)+(mirror.error_code?' · '+mirror.error_code:'')],['Pending Sheet operations',outbox?'Stored jobs':'No stored jobs',outbox||'No outbox state reported.'],['Deletion execution','Separate executor required','Queueing records links; a configured deletion workflow must report each result.'],['Sync cadence',d.schedule_interval_minutes?String(d.schedule_interval_minutes)+' minutes':'Unknown','Reported collection cadence; configured times do not prove successful runs.']].map(([title,value,detail])=>'<div class="status-card"><strong>'+esc(title)+'</strong>'+contentState(value)+'<p>'+esc(detail)+'</p></div>').join('');$('content-sheet-setup').disabled=!d.schema_ready||!d.sheet_write_enabled;$('content-sheet-sync').disabled=!d.schema_ready||!d.sheet_write_enabled;$('content-sheet-notice').textContent=d.sheet_write_enabled?'Writes enabled in Worker configuration. A Google authorization error still requires write scope.':'Mapping/clickouts writes are disabled; dashboard storage still writes to its internal Sheets tabs. Configure GOOGLE_SHEETS_WRITE_ENABLED=1 and a Google credential with Sheets write scope before using these controls.'}else $('content-system-status').innerHTML='<div class="status-card"><strong>Content status unavailable</strong><p>'+esc(statusResult.reason.message)+'</p></div>';
  if(assetsResult.status==='fulfilled'){contentAssets=assetsResult.value.rows||[];refreshContentAccounts();$('content-assets').innerHTML=contentAssets.length?contentAssets.map(r=>'<tr><td>'+platformBadge(r.platform)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.id)+'</td><td>'+esc(contentDate(r.updated_at))+'</td></tr>').join(''):'<tr><td colspan="4" class="empty">No connected account metadata collected.</td></tr>'}else $('content-assets').innerHTML='<tr><td colspan="4">'+esc(assetsResult.reason.message)+'</td></tr>';
  if(capabilitiesResult.status==='fulfilled'){const rows=capabilitiesResult.value.rows||[];$('content-capabilities').innerHTML=rows.length?rows.map(r=>'<tr><td>'+esc(r.asset_id)+'<div class="sub">'+esc(r.kind)+'</div></td><td>'+esc(r.metric)+'</td><td>'+contentState(r.status)+(r.checked_at&&Date.now()-Date.parse(r.checked_at)>86400000?' · stale':'')+'</td><td>'+esc(r.reason||'—')+'</td><td>'+esc(contentDate(r.checked_at))+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No metric checks stored. This does not confirm support.</td></tr>'}else $('content-capabilities').innerHTML='<tr><td colspan="5">'+esc(capabilitiesResult.reason.message)+'</td></tr>';
 }
-function clearContentState(){contentScanRequest=null;$('content-scan-notice').textContent='';$('content-scan-notice').classList.remove('loading-indicator');$('content-scan-account').classList.add('hidden');$('similarity-auto-status').classList.remove('loading-indicator');setActionFeedback('content-error-selection','');cancelCleanupRetry();cleanupLoad=null;cleanupRetryCount=0;cleanupRetryAt=0;cleanupFresh=false;$('content-group-evidence').textContent='';contentGroupRows=[];$('content-group-cards').replaceChildren();contentErrors.clear();for(const view of ['inventory','compare','cleanup','availability'])renderContentErrors(view);contentInfoPinned.clear();stopAutoPreviews(true);clearTimeout(metaPollTimer);metaPollTimer=null;for(const id of ['similarity-auto-status','meta-progress','meta-account-progress','meta-account-observations','meta-coverage-summary','content-window-summary'])$(id).replaceChildren();contentRows=[];contentVisible=[];contentAssets=[];contentGroups=[];contentQueue=[];contentSelection.clear();contentSeries=[];contentChartSvg='';contentOffset=0;contentHasMore=false;setContentQueueBusy(false);contentChartVersion++;clearContentPlan();for(const id of ['content-cards','content-table','content-stats','content-compare-selection','content-chart','content-chart-legend','content-observations','content-group-info','content-group-members','content-queue','content-system-status','content-assets','content-capabilities','content-page','content-cleanup-notice','content-plan-notice','content-confirm-notice','content-library-notice','meta-notice','content-sheet-notice','schedule-rows','schedule-evidence'])$(id).replaceChildren();$('content-group').innerHTML='<option value="">Choose a group</option>';$('content-account').innerHTML='<option value="">All accounts</option>';for(const id of ['content-search','content-from','content-to','content-keep-count','content-keep-strategy','content-group-platform'])$(id).value='';$('content-selection-count').textContent='Select up to 4 posts on the same platform.';$('content-chart-status').textContent='Select posts in the library to begin.';$('content-queue-status').textContent='No queue status loaded.';$('content-chart-export').disabled=true;$('content-series-export').disabled=true;$('content-more').classList.add('hidden')}
+function clearContentState(){contentScanProgressData=null;contentScanProgressStale=false;contentPickerEntries=[];closeGroupPicker();$('content-group-picker-label').textContent='Choose a group';$('content-scan-accounts-details').open=false;for(const id of ['content-scan-overall','content-scan-selected','content-scan-accounts','content-group-options'])$(id).replaceChildren();contentScanRequest=null;$('content-scan-notice').textContent='';$('content-scan-notice').classList.remove('loading-indicator');$('content-scan-account').classList.add('hidden');$('similarity-auto-status').classList.remove('loading-indicator');setActionFeedback('content-error-selection','');cancelCleanupRetry();cleanupLoad=null;cleanupRetryCount=0;cleanupRetryAt=0;cleanupFresh=false;$('content-group-evidence').textContent='';contentGroupRows=[];$('content-group-cards').replaceChildren();$('content-queue-cards').replaceChildren();contentErrors.clear();for(const view of ['inventory','compare','cleanup','availability'])renderContentErrors(view);contentInfoPinned.clear();stopAutoPreviews(true);clearTimeout(metaPollTimer);metaPollTimer=null;for(const id of ['similarity-auto-status','meta-progress','meta-account-progress','meta-account-observations','meta-coverage-summary','content-window-summary'])$(id).replaceChildren();contentRows=[];contentVisible=[];contentAssets=[];contentGroups=[];contentQueue=[];contentSelection.clear();contentSeries=[];contentChartSvg='';contentOffset=0;contentHasMore=false;setContentQueueBusy(false);contentChartVersion++;clearContentPlan();for(const id of ['content-cards','content-table','content-stats','content-compare-selection','content-chart','content-chart-legend','content-observations','content-group-info','content-group-members','content-queue','content-system-status','content-assets','content-capabilities','content-page','content-cleanup-notice','content-plan-notice','content-confirm-notice','content-library-notice','meta-notice','content-sheet-notice','schedule-rows','schedule-evidence'])$(id).replaceChildren();$('content-group').innerHTML='<option value="">Choose a group</option>';$('content-account').innerHTML='<option value="">All accounts</option>';for(const id of ['content-search','content-from','content-to','content-keep-count','content-keep-strategy','content-group-platform'])$(id).value='';$('content-selection-count').textContent='Select up to 4 posts on the same platform.';$('content-chart-status').textContent='Select posts in the library to begin.';$('content-queue-status').textContent='No queue status loaded.';$('content-chart-export').disabled=true;$('content-series-export').disabled=true;$('content-more').classList.add('hidden')}
 for(const view of ['inventory','compare','cleanup','availability'])$('content-nav-'+view).onclick=()=>showContentView(view).catch(contentError);
 const contentTabNames=['inventory','compare','cleanup','availability'];for(const [index,name] of contentTabNames.entries())$('content-nav-'+name).addEventListener('keydown',e=>{let next;if(e.key==='ArrowRight')next=(index+1)%contentTabNames.length;else if(e.key==='ArrowLeft')next=(index+contentTabNames.length-1)%contentTabNames.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=contentTabNames.length-1;else return;e.preventDefault();$('content-nav-'+contentTabNames[next]).focus();showContentView(contentTabNames[next]).catch(contentError)});
 for(const id of ['content-platform','content-account'])$(id).addEventListener('change',()=>{if(id==='content-platform')$('content-account').value='';loadContent().catch(contentError)});
 $('content-search').addEventListener('input',wait(()=>loadContent().catch(contentError)));
 for(const id of ['content-from','content-to'])$(id).addEventListener('change',()=>loadContent().catch(contentError));$('content-layout').addEventListener('change',renderContent);
-for(const id of ['content-cards','content-table','content-group-cards']){$(id).addEventListener('change',e=>{if(e.target.dataset.contentSelect!==undefined)selectContent(Number(e.target.dataset.contentSelect),e.target.checked)});$(id).addEventListener('click',e=>{const button=e.target.closest('[data-preview]');if(button)loadContentPreview(button.dataset.preview).catch(contentError)})}
+for(const id of ['content-cards','content-table','content-group-cards','content-queue-cards']){$(id).addEventListener('change',e=>{if(e.target.dataset.contentSelect!==undefined)selectContent(Number(e.target.dataset.contentSelect),e.target.checked)});$(id).addEventListener('click',e=>{const button=e.target.closest('[data-preview]');if(button)loadContentPreview(button.dataset.preview).catch(contentError)})}
 $('content-open-compare').onclick=()=>showContentView('compare').catch(contentError);$('content-clear-selection').onclick=()=>{setActionFeedback('content-error-selection','');contentSelection.clear();invalidateContentChart();renderContent()};
 $('content-metric').addEventListener('change',invalidateContentChart);$('content-chart-mode').addEventListener('change',()=>{if(contentSeries.length)renderContentChart()});
+$('content-group-toggle').onclick=()=>{$('content-group-options').hidden?openGroupPicker():closeGroupPicker();};
+$('content-group-toggle').addEventListener('keydown',e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();openGroupPicker();}else if(e.key==='Escape'){e.preventDefault();closeGroupPicker();}else if(e.key==='Tab')closeGroupPicker();});
+$('content-group-options').addEventListener('click',e=>{const option=e.target.closest('[data-group-index]');if(option)chooseContentGroup(option.dataset.groupIndex);});
+$('content-group-options').addEventListener('keydown',groupPickerKeydown);
+document.addEventListener('click',e=>{if(!$('content-group-picker').contains?.(e.target))closeGroupPicker();});
+document.addEventListener('focusin',e=>{if(!$('content-group-picker').contains?.(e.target))closeGroupPicker();});
 $('content-group-platform').addEventListener('change',()=>{clearContentPlan();renderGroupOptions();renderContentGroup()});$('content-group-order').addEventListener('change',updateGroupPresentation);
 $('content-group').addEventListener('change',()=>{clearContentPlan();renderContentGroup()});for(const id of ['content-keep-count','content-keep-strategy','content-keep-metric','content-weight-views','content-weight-likes'])$(id).addEventListener('input',()=>clearContentPlan());$('content-confirm').addEventListener('input',updateContentConfirmation);$('content-plan-cancel').onclick=()=>{if(contentQueueBusy)return;clearContentPlan();$('content-plan-notice').textContent='Plan canceled. No new links queued.'};
 $('content-export-csv').onclick=()=>{const rows=contentExportRows();downloadProducerFile('content-visible.csv',contentCsv(rows,['platform','account_id','account_handle','post_id','published_at','media_type','caption','permalink','workflow_url',...contentMetrics,'first_seen','last_seen','delete_status']),'text/csv;charset=utf-8')};$('content-export-json').onclick=()=>downloadProducerFile('content-visible.json',JSON.stringify({scope:'Visible loaded records only',rows:contentExportRows()},null,2),'application/json');
@@ -382,8 +482,8 @@ async function syncContentMeta(){const epoch=authEpoch;clearTimeout(metaPollTime
 
 // Warm nearby previews only; all requests share a bounded queue.
 let contentGroupRows=[];
-const previewRow=i=>String(i).startsWith('g')?contentGroupRows[Number(String(i).slice(1))]:contentVisible[Number(i)];
-const previewIndexes=()=>contentView==='cleanup'?contentGroupRows.map((_,i)=>'g'+i):contentVisible.map((_,i)=>i);
+const previewRow=i=>String(i).startsWith('g')?contentGroupRows[Number(String(i).slice(1))]:String(i).startsWith('q')?contentQueue[Number(String(i).slice(1))]:contentVisible[Number(i)];
+const previewIndexes=()=>contentView==='cleanup'?[...contentGroupRows.map((_,i)=>'g'+i),...contentQueue.map((_,i)=>'q'+i)]:contentVisible.map((_,i)=>i);
 
 const previewBusyBoxes=new Set();
 function setPreviewLoading(box,label){if(!box)return;previewBusyBoxes.add(box);box.classList.add('preview-loading');box.dataset.loadingLabel=label;box.setAttribute('aria-busy','true');box.setAttribute('aria-label',label);}
@@ -396,27 +496,27 @@ function stopAutoPreviews(clear=false){
  previewGeneration++;clearTimeout(previewResumeTimer);previewResumeTimer=null;for(const done of previewSettlers)done();previewObserver?.disconnect();previewObserver=null;
  for(const job of previewQueue)job.resolve();previewQueue=[];
  for(const [key,controller] of inflight)if(key.startsWith('content:/api/content/preview?'))controller.abort();
- if(typeof document.querySelectorAll==='function')for(const media of document.querySelectorAll('#content-cards img, #content-cards video, #content-group-cards img, #content-group-cards video')){media.removeAttribute('src');if(media.tagName==='VIDEO'){media.pause();media.load();}}
+ if(typeof document.querySelectorAll==='function')for(const media of document.querySelectorAll('#content-cards img, #content-cards video, #content-group-cards img, #content-group-cards video, #content-queue-cards img, #content-queue-cards video')){media.removeAttribute('src');if(media.tagName==='VIDEO'){media.pause();media.load();}}
  if(clear){previewCache.clear();previewNextRequest=0;previewWaitReason='pacing';}
 }
 function startAutoPreviews(){
  if(typeof IntersectionObserver==='undefined'||!token||!['inventory','cleanup'].includes(contentView)||(contentView==='inventory'&&$('content-layout').value==='table'))return;
- const generation=previewGeneration;
+ const generation=previewGeneration;previewObserver?.disconnect();
  previewObserver=new IntersectionObserver(entries=>{
   if(generation!==previewGeneration||!token)return;
   for(const entry of entries){const box=entry.target;if(entry.isIntersecting){if(!box.dataset.previewAttempted){box.dataset.previewAttempted='1';loadContentPreview(box.id.replace('content-preview-',''));}}else{
    previewQueue=previewQueue.filter(job=>{if(job.box!==box)return true;delete box.dataset.previewAttempted;clearPreviewLoading(box);job.resolve();return false;});
   }}
  },{rootMargin:'1800px 0px',threshold:0});
- for(const i of previewIndexes()){const box=$('content-preview-'+i);if(box)previewObserver.observe(box);}
+ for(const i of previewIndexes()){const box=$('content-preview-'+i),row=previewRow(i);if(box&&row?.preview_available!==false&&(!String(i).startsWith('q')||(row?.post_id&&row?.account_id)))previewObserver.observe(box);}
 }
 function loadContentPreview(index){
- const box=$('content-preview-'+index);if(!box||!previewRow(index)||!token)return Promise.resolve();
+ const box=$('content-preview-'+index),row=previewRow(index);if(!box||!row||row.preview_available===false||(String(index).startsWith('q')&&(!row.post_id||!row.account_id))||!token)return Promise.resolve();
  if(box._previewJob)return box._previewJob;
  const generation=previewGeneration;
  const pending=new Promise(resolve=>{previewQueue.push({index,box,generation,resolve});});
  box._previewJob=pending;setPreviewLoading(box,'Preview queued…');drainPreviews();
- return pending.finally(()=>{if(box._previewJob===pending){delete box._previewJob;clearPreviewLoading(box);}});
+ return pending.finally(()=>{if(box._previewJob===pending){delete box._previewJob;if(!box._videoBuffering)clearPreviewLoading(box);}});
 }
 function setPreviewWait(until,reason='pacing'){
  if(until>=previewNextRequest){previewNextRequest=until;previewWaitReason=reason;}
@@ -489,14 +589,14 @@ function relativeContentDate(value,now=Date.now()){
 function contentTimeBlock(value){return '<span class="post-time"><strong data-relative-time="'+esc(value||'')+'">'+esc(relativeContentDate(value))+'</strong><span>'+esc(contentDate(value))+'</span></span>';}
 function contentGalleryCard(r,i){
  const pinned=contentInfoPinned.has(contentKey(r)),selected=contentSelection.has(contentKey(r));
- return '<article class="content-card gallery-card'+(selected?' is-selected':'')+(pinned?' info-open':'')+'" id="content-card-'+i+'"'+(String(i).startsWith('g')?' data-decision="'+groupDecision(r).tone+'"':'')+'><header class="gallery-summary" id="content-summary-'+i+'">'+gallerySummary(r,i,Number(String(i).replace('g',''))+1)+'</header>'+
- '<div class="media-preview" id="content-preview-'+i+'" tabindex="0" aria-label="Media preview. Focus or hover to see the full image."><div class="preview-placeholder"><strong>'+esc(r.media_type||'Media')+'</strong><button class="btn" data-preview="'+i+'">Load preview</button><span class="preview-message">Preview loads as you approach</span></div></div>'+
+ return '<article class="content-card gallery-card'+(selected?' is-selected':'')+(pinned?' info-open':'')+'" id="content-card-'+i+'"'+(String(i).startsWith('g')?' data-decision="'+groupDecision(r).tone+'"':String(i).startsWith('q')?' data-decision="queued"':'')+'><header class="gallery-summary" id="content-summary-'+i+'">'+gallerySummary(r,i,Number(String(i).replace('g',''))+1)+'</header>'+
+ '<div class="media-preview" id="content-preview-'+i+'" tabindex="0" aria-label="Media preview. Focus or hover to see the full image."><div class="preview-placeholder"><strong>'+esc(r.media_type||'Media')+'</strong>'+(r.preview_available===false?'<p>'+esc(r.preview_unavailable_reason||'Post identity has not been verified. Open the original link.')+'</p>'+link(r.permalink,'Open original ↗'):'<button class="btn" data-preview="'+i+'">Load preview</button><span class="preview-message">Preview loads as you approach</span>')+'</div></div>'+
  '<div class="post-corner'+(pinned?' is-pinned':'')+'" data-post-corner="'+i+'"><button class="post-info-toggle" data-info-toggle="'+i+'" aria-label="Post details for '+esc(contentAccountLabel(r))+'" aria-controls="post-info-'+i+'" aria-expanded="'+pinned+'" aria-pressed="'+pinned+'">i</button>'+
  '<section class="post-info" id="post-info-'+i+'" aria-label="Post details" '+(pinned?'':'hidden')+'><div class="post-info-heading">'+platformBadge(r.platform)+'<button class="btn" data-info-hide="'+i+'">Hide details</button></div>'+
  '<h3>'+esc(contentAccountLabel(r))+'</h3>'+contentTimeBlock(r.published_at)+
  '<div class="tags"><span class="tag">'+esc(r.media_type||'Unknown media type')+'</span>'+contentState(r.delete_status||'Stored')+'</div>'+
  '<p class="content-caption">'+esc(r.caption||'No caption collected')+'</p>'+
- '<div class="post-id">Post '+esc(r.post_id)+'</div><div class="content-links">'+contentPostLinks(r)+'</div><div class="post-info-bottom">'+(String(i).startsWith('g')?'<span class="sub">Duplicate candidate · '+esc(r._groupEvidence||'Review the original posts before planning.')+'</span>':contentCheckbox(r,i))+'</div><div class="sub">First collected '+contentTimeBlock(r.first_seen)+'</div>'+postCommentWidget(r,i)+'</section></div></article>';
+ '<div class="post-id">Post '+esc(r.post_id)+'</div><div class="content-links">'+contentPostLinks(r)+'</div><div class="post-info-bottom">'+(String(i).startsWith('q')?'<span class="sub">'+esc(queueStatusLabel(r))+'. A queued link is not proof of deletion.</span>':String(i).startsWith('g')?'<span class="sub">Duplicate candidate · '+esc(r._groupEvidence||'Review the original posts before planning.')+'</span>':contentCheckbox(r,i))+'</div><div class="sub">First collected '+contentTimeBlock(r.first_seen)+'</div>'+postCommentWidget(r,i)+'</section></div></article>';
 }
 function setContentInfo(index,open,pin){
  const row=previewRow(index),panel=$('post-info-'+index),card=$('content-card-'+index);if(!row||!panel||!card)return;
@@ -505,7 +605,7 @@ function setContentInfo(index,open,pin){
  const corner=card.querySelector('.post-corner'),button=card.querySelector('[data-info-toggle]');
  corner.classList.toggle('is-pinned',pinned);card.classList.toggle('info-open',shown);button.setAttribute('aria-expanded',String(shown));button.setAttribute('aria-pressed',String(pinned));if(typeof schedulePostComments==='function')schedulePostComments(index,shown,pinned);
 }
-for(const gallery of [$('content-cards'),$('content-group-cards')]){
+for(const gallery of [$('content-cards'),$('content-group-cards'),$('content-queue-cards')]){
 gallery.addEventListener('pointerover',e=>{if(e.pointerType==='touch')return;const corner=e.target.closest('[data-post-corner]');if(corner&&!corner.contains(e.relatedTarget))setContentInfo(corner.dataset.postCorner,true);});
 gallery.addEventListener('pointerout',e=>{const corner=e.target.closest('[data-post-corner]');if(corner&&!corner.contains(e.relatedTarget)&&!corner.contains(document.activeElement))setContentInfo(corner.dataset.postCorner,false);});
 gallery.addEventListener('focusin',e=>{const corner=e.target.closest('[data-post-corner]');if(corner)setContentInfo(corner.dataset.postCorner,true);});

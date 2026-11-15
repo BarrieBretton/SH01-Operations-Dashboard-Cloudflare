@@ -54,7 +54,7 @@ test('transient failures have a bounded cooldown instead of repeated immediate u
  const h=setup(),b=await h.payload();let n=0;h.c.fetch=async()=>{n++;return new Response(null,{status:429});};await assert.rejects(h.c.extrasMedia(h.req(),h.env,b),/rate_limited/);await assert.rejects(h.c.extrasMedia(h.req(),h.env,b),e=>e.retryAfter>=75);assert.equal(n,1);
 });
 test('new routes require dashboard auth even when the edge cache is warm; scanner credential is insufficient',async()=>{
- const env={DASHBOARD_TOKEN:'reader',MEDIA_CLIP_API_KEY:'scanner'};for(const path of ['/api/content/media','/api/content/comments'])for(const headers of [{},{Authorization:'Bearer scanner'},{'X-INGEST-KEY':'scanner'}])assert.equal((await worker.fetch(new Request('https://dashboard.test'+path,{method:'POST',headers,body:'{}'}),env,{})).status,401);
+ const env={DASHBOARD_TOKEN:'reader',MEDIA_CLIP_API_KEY:'scanner'};for(const path of ['/api/content/media','/api/content/poster','/api/content/comments'])for(const headers of [{},{Authorization:'Bearer scanner'},{'X-INGEST-KEY':'scanner'}])assert.equal((await worker.fetch(new Request('https://dashboard.test'+path,{method:'POST',headers,body:'{}'}),env,{})).status,401);
  assert.equal((await worker.fetch(new Request('https://dashboard.test/__private_post_cache/anything'),env,{})).status,404);
 });
 test('explicit failed-video recovery refreshes once per cooldown and replaces the ordinary shared descriptor',async()=>{
@@ -64,4 +64,33 @@ test('explicit failed-video recovery refreshes once per cooldown and replaces th
 });
 test('Graph retry jitter respects numeric and date Retry-After floors instead of retrying early',()=>{
  const c={Date,Math:Object.create(Math)};vm.createContext(c);vm.runInContext(fs.readFileSync(new URL('./meta-worker.js',import.meta.url),'utf8'),c);c.Math.random=()=>0;assert.equal(c.metaRetryDelay(0,'120'),120000);c.Math.random=()=>0.8;assert.equal(c.metaRetryDelay(0,'120'),120400);assert.ok(c.metaRetryDelay(0,new Date(Date.now()+60000).toUTCString())>=59000);
+});
+
+test('stored video posters cache as image bytes without Sheets, Meta or video downloads',async()=>{
+ const h=setup(),p={...post,preview_url:'https://a.cdninstagram.com/clip.mp4',preview_type:'video',media_type:'VIDEO',poster_url:'https://a.cdninstagram.com/poster.jpg'},b=await h.payload(p),urls=[];
+ h.c.fetch=async url=>{urls.push(url);return new Response('thumbnail',{headers:{'Content-Type':'image/png'}})};
+ const response=await h.c.extrasPoster(h.req(),h.env,b);assert.equal(response.headers.get('Content-Type'),'image/png');assert.deepEqual(urls,[p.poster_url]);assert.equal(h.calls.store,0);assert.equal(h.calls.refresh,0);
+ const fresh=setup(h.shared);await fresh.c.extrasPoster(fresh.req(),fresh.env,b);assert.equal(fresh.calls.cdn,0);assert.equal(fresh.calls.store,0);assert.equal(fresh.calls.refresh,0);
+ const descriptor=await (await h.c.extrasMedia(h.req(),h.env,b)).json();assert.equal(descriptor.kind,'video');assert.equal(descriptor.poster,p.poster_url);
+});
+test('expired posters refresh once and unavailable thumbnails are cached without consuming video bodies',async()=>{
+ const h=setup(),p={...post,preview_type:'video',media_type:'VIDEO',poster_url:'https://a.cdninstagram.com/old.jpg'},b=await h.payload(p);let calls=0;
+ h.c.metaPreview=async()=>{h.calls.refresh++;return {kind:'video',available:true,url:'https://a.cdninstagram.com/clip.mp4',poster:'https://a.cdninstagram.com/new.jpg'}};
+ h.c.fetch=async url=>{calls++;return url===p.poster_url?new Response(null,{status:403}):new Response('new',{headers:{'Content-Type':'image/jpeg'}})};
+ await h.c.extrasPoster(h.req(),h.env,b);assert.equal(h.calls.refresh,1);assert.equal(calls,2);
+ const q=setup();let cancelled=false;q.c.fetch=async()=>new Response(new ReadableStream({cancel(){cancelled=true}}),{headers:{'Content-Type':'video/mp4'}});
+ const payload=await q.payload(p);assert.equal((await (await q.c.extrasPoster(q.req(),q.env,payload)).json()).available,false);assert.equal(cancelled,true);
+ await q.c.extrasPoster(q.req(),q.env,payload);assert.equal(q.shared.size,1);
+});
+test('poster tickets cannot be moved to another account or replaced with an arbitrary URL',async()=>{
+ const h=setup(),p={...post,media_type:'VIDEO',preview_type:'video',poster_url:'https://a.cdninstagram.com/poster.jpg'},b=await h.payload(p),seen=[];
+ h.c.fetch=async url=>{seen.push(url);return new Response('image',{headers:{'Content-Type':'image/png'}})};
+ await h.c.extrasPoster(h.req(),h.env,{...b,poster_url:'https://attacker.test/track'});assert.deepEqual(seen,[p.poster_url]);
+ await assert.rejects(h.c.extrasPoster(h.req(),h.env,{...b,account_id:'other'}),/identity/);
+});
+
+test('poster resolution reuses a freshly resolved video descriptor instead of requesting Meta twice',async()=>{
+ const h=setup(),b=await h.payload({...post,media_type:'VIDEO',preview_type:'video',preview_url:'https://a.cdninstagram.com/expired.mp4?oe=1',poster_url:'https://a.cdninstagram.com/expired.jpg?oe=1'});
+ h.c.metaPreview=async()=>{h.calls.refresh++;return {available:true,kind:'video',url:'https://a.cdninstagram.com/fresh.mp4',poster:'https://a.cdninstagram.com/fresh.jpg'}};
+ await h.c.extrasMedia(h.req(),h.env,b);await h.c.extrasPoster(h.req(),h.env,b);assert.equal(h.calls.refresh,1);assert.equal(h.calls.cdn,1);
 });

@@ -178,5 +178,5 @@ async function metaPreview(env,row){
   if(source)kind='video';else source=data.full_picture||attachment.media?.image?.src||'';
  }
  const url=contentPreview(source),poster_only=kind!=='video'&&(isVideo||['VIDEO','REELS'].includes(row.media_type));
- return {url,kind,available:!!url,refreshed:true,poster_only};
+ return {url,kind,available:!!url,refreshed:true,poster_only,poster:kind==='video'?contentPreview(data.thumbnail_url||data.full_picture||attachment?.media?.image?.src):''};
 }

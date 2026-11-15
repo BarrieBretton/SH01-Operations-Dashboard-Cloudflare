@@ -9,7 +9,7 @@ async function extrasScope(env){return producerHash(JSON.stringify(['extras-v1',
 async function extrasSigningKey(env){if(!env.DASHBOARD_TOKEN)throw Error('dashboard_auth_not_configured');return crypto.subtle.importKey('raw',extrasText.encode(env.DASHBOARD_TOKEN),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);}
 async function extrasSign(env,data){const p=extrasB64(extrasText.encode(JSON.stringify(data)));return p+'.'+extrasB64(await crypto.subtle.sign('HMAC',await extrasSigningKey(env),extrasText.encode(p)));}
 async function extrasVerify(env,value,type){try{if(typeof value!=='string'||value.length>14000)throw 0;const [p,s,...rest]=value.split('.');if(rest.length||!await crypto.subtle.verify('HMAC',await extrasSigningKey(env),extrasUnb64(s),extrasText.encode(p)))throw 0;const d=JSON.parse(new TextDecoder().decode(extrasUnb64(p)));if(d.type!==type||d.exp<Date.now()||d.scope!==await extrasScope(env))throw 0;return d;}catch{throw Error('post_ticket_expired_or_invalid');}}
-async function extrasDecorate(env,rows){if(!env.DASHBOARD_TOKEN)return rows;const scope=await extrasScope(env);return Promise.all(rows.map(async r=>{if(!r.post_id||r.delete_status==='deleted')return r;const url=contentPreview(r.preview_url),rev=await producerHash(JSON.stringify([r.platform,r.account_id,r.post_id,r.preview_type,r.media_type,url?new URL(url).origin+new URL(url).pathname:'']));const data={type:'post',scope,platform:r.platform,account_id:r.account_id,post_id:r.post_id,preview_url:url,preview_type:r.preview_type,media_type:r.media_type,rev,exp:Date.now()+6*3600000};return {...r,cache_scope:scope,media_revision:rev,extras_ticket:await extrasSign(env,data)};}));}
+async function extrasDecorate(env,rows){if(!env.DASHBOARD_TOKEN)return rows;const scope=await extrasScope(env);return Promise.all(rows.map(async r=>{if(!r.post_id||!r.account_id||r.preview_available===false||r.delete_status==='deleted')return r;const url=contentPreview(r.preview_url),poster=contentPreview(r.poster_url),rev=await producerHash(JSON.stringify([r.platform,r.account_id,r.post_id,r.preview_type,r.media_type,url?new URL(url).origin+new URL(url).pathname:'',...(['VIDEO','REELS'].includes(r.media_type)?['poster-v1',poster?new URL(poster).origin+new URL(poster).pathname:'']:[])]));const data={type:'post',scope,platform:r.platform,account_id:r.account_id,post_id:r.post_id,preview_url:url,poster_url:poster,preview_type:r.preview_type,media_type:r.media_type,rev,exp:Date.now()+6*3600000};return {...r,cache_scope:scope,media_revision:rev,extras_ticket:await extrasSign(env,data)};}));}
 async function extrasPost(env,b){const where={platform:contentPlatform(b.platform),account_id:contentID(b.account_id),post_id:contentID(b.post_id)};let row;
  if(b.ticket){row=await extrasVerify(env,b.ticket,'post');if(Object.keys(where).some(k=>where[k]!==row[k]))throw Error('post_ticket_identity_mismatch');}
  else {row=await env.STORE.find('content_posts',where);if(!row||row.delete_status==='deleted')throw Error('post_unavailable');const [d]=await extrasDecorate(env,[row]);row={...row,scope:d.cache_scope,rev:d.media_revision};}
@@ -24,10 +24,34 @@ async function extrasCached(req,scope,key,create){const cacheKey=await extrasCac
 async function extrasCDN(url){let current=contentPreview(url);if(!current)throw Error('preview_url_unavailable');for(let i=0;i<3;i++){const r=await fetch(current,{redirect:'manual',signal:AbortSignal.timeout(15000)});if(r.status>=300&&r.status<400){const target=contentPreview(new URL(r.headers.get('Location')||'',current).href);await r.body?.cancel();if(!target)throw Error('preview_redirect_rejected');current=target;continue;}return r;}throw Error('preview_redirect_rejected');}
 async function extrasBytes(res){const size=Number(res.headers.get('Content-Length'));if(size>EXTRAS_IMAGE_MAX){await res.body?.cancel();throw Error('preview_image_too_large');}const reader=res.body.getReader(),chunks=[];let total=0;try{while(true){const {value,done}=await reader.read();if(done)break;total+=value.byteLength;if(total>EXTRAS_IMAGE_MAX)throw Error('preview_image_too_large');chunks.push(value);}}catch(e){await reader.cancel();throw e;}const out=new Uint8Array(total);let offset=0;for(const chunk of chunks){out.set(chunk,offset);offset+=chunk.length;}return out;}
 function extrasURLTTL(url,maximum=1800){let ttl=maximum;try{const oe=new URL(url).searchParams.get('oe');if(oe&&/^[a-f0-9]+$/i.test(oe))ttl=Math.min(ttl,Math.floor((parseInt(oe,16)*1000-Date.now()-30000)/1000));}catch{return 0;}return Math.max(0,ttl);}
+async function extrasPoster(req,env,b){
+ const row=await extrasPost(env,b),key='poster-v1:'+row.platform+':'+row.account_id+':'+row.post_id+':'+row.rev;
+ return extrasCached(req,row.scope,key,async()=>{
+  const unavailable=()=>({response:json({available:false,reason:'thumbnail_unavailable'}),ttl:300});
+  let url=contentPreview(row.poster_url||(row.preview_type==='image'?row.preview_url:'')),refreshed=false;
+  const refresh=async()=>{refreshed=true;const d=await metaPreview(env,row);return contentPreview(d?.poster||(d?.kind==='image'?d.url:''));};
+  // Playback resolution may already have refreshed the thumbnail. Reuse its
+  // authenticated descriptor before requesting the same Meta object again.
+  if(!url||extrasURLTTL(url)<=0){try{
+   const descriptor=await globalThis.caches?.default?.match(await extrasCacheKey(req,row.scope,'media:'+row.platform+':'+row.account_id+':'+row.post_id+':'+row.rev));
+   if(descriptor&&Number(descriptor.headers.get('X-Extras-Expires'))>Date.now()&&(descriptor.headers.get('Content-Type')||'').includes('application/json')){
+    const d=await descriptor.json(),cached=contentPreview(d.poster);if(cached&&extrasURLTTL(cached)>0)url=cached;
+   }
+  }catch{}}
+  if(!url||extrasURLTTL(url)<=0)url=await refresh();
+  if(!url)return unavailable();
+  let response=await extrasCDN(url);
+  if([403,404,410].includes(response.status)&&!refreshed){await response.body?.cancel();url=await refresh();if(!url)return unavailable();response=await extrasCDN(url);}
+  if(!response.ok){await response.body?.cancel();if([429,503].includes(response.status))throw Error('preview_cdn_rate_limited');return unavailable();}
+  const mime=(response.headers.get('Content-Type')||'').split(';')[0].trim();
+  if(!/^image\/(jpeg|png|webp|gif|avif)$/.test(mime)){await response.body?.cancel();return unavailable();}
+  return {response:new Response(await extrasBytes(response),{headers:{'Content-Type':mime}}),ttl:EXTRAS_IMAGE_TTL};
+ });
+}
 async function extrasMedia(req,env,b){const row=await extrasPost(env,b),recover=b.refresh===true,key='media:'+row.platform+':'+row.account_id+':'+row.post_id+':'+row.rev;const create=async()=>{let d={url:contentPreview(row.preview_url),kind:row.preview_type==='video'?'video':'image',available:!!row.preview_url};
  if(recover||!d.url||row.media_type==='POST'||(['VIDEO','REELS'].includes(row.media_type)&&d.kind!=='video')||extrasURLTTL(d.url)<=0)d=await metaPreview(env,row);
  if(!d?.available||!contentPreview(d.url))throw Error('preview_url_unavailable');
- if(d.kind==='video')return {response:json({...d,poster:row.preview_type==='image'?contentPreview(row.preview_url):''}),ttl:extrasURLTTL(d.url)};
+ if(d.kind==='video')return {response:json({...d,poster:contentPreview(d.poster||row.poster_url||(row.preview_type==='image'?row.preview_url:''))}),ttl:extrasURLTTL(d.url)};
  let response=await extrasCDN(d.url);if([403,404,410].includes(response.status)){await response.body?.cancel();d=await metaPreview(env,row);if(!d?.available||!contentPreview(d.url))throw Error('preview_url_unavailable');if(d.kind==='video')return {response:json(d),ttl:extrasURLTTL(d.url)};response=await extrasCDN(d.url);}
  if(!response.ok){await response.body?.cancel();throw Error([429,503].includes(response.status)?'preview_cdn_rate_limited':'preview_cdn_unavailable');}
  const mime=(response.headers.get('Content-Type')||'').split(';')[0].trim();if(!/^image\/(jpeg|png|webp|gif|avif)$/.test(mime)){await response.body?.cancel();throw Error('preview_format_unsupported');}
@@ -42,4 +66,4 @@ async function extrasComments(req,env,b){const row=await extrasPost(env,b);if(![
  const after=data.paging?.next&&data.paging?.cursors?.after!==cursor.after?data.paging?.cursors?.after:null;return {response:json({available:true,rows,parent:cursor.parent||null,next_cursor:after?await extrasCursor(env,row,cursor.parent,String(after)):null,checked_at,refresh_after:new Date(Date.now()+300000).toISOString(),scope:'Comments visible to the connected account; privacy and permissions may restrict results.'}),ttl:EXTRAS_COMMENTS_TTL};
  }catch(e){const reason=e.category||e.message;if(['permission_denied','credential_rejected','invalid_parameter_or_object'].includes(reason))return {response:json({available:false,rows:[],reason,checked_at,refresh_after:new Date(Date.now()+300000).toISOString()}),ttl:300};throw e;}});
 }
-async function contentExtrasApi(req,env){try{const b=await body(req);return new URL(req.url).pathname.endsWith('/comments')?await extrasComments(req,env,b):await extrasMedia(req,env,b);}catch(e){const reason=e.category||e.message,code=/^[a-z_]+$/.test(reason)?reason:'post_extras_unavailable';const retry=/rate|store_|network|busy|upstream/.test(code);return new Response(JSON.stringify({error:code}),{status:retry?503:400,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...(retry?{'Retry-After':String(e.retryAfter||75)}:{})}});}}
+async function contentExtrasApi(req,env){try{const b=await body(req);return new URL(req.url).pathname.endsWith('/comments')?await extrasComments(req,env,b):new URL(req.url).pathname.endsWith('/poster')?await extrasPoster(req,env,b):await extrasMedia(req,env,b);}catch(e){const reason=e.category||e.message,code=/^[a-z_]+$/.test(reason)?reason:'post_extras_unavailable';const retry=/rate|store_|network|busy|upstream/.test(code);return new Response(JSON.stringify({error:code}),{status:retry?503:400,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...(retry?{'Retry-After':String(e.retryAfter||75)}:{})}});}}

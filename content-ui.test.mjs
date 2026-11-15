@@ -10,7 +10,7 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={prioritizeContentAccount,renderAccountScan,contentScanCoverage,renderAutoScanStatus,contentAccountLabel,contentGroupCount,contentGroupNumbers,setAssets:a=>{contentAssets=a},setProducers:p=>{producerList=p},renderProducers,loadProducerEligibleItems,getProducerExpansions:()=>producerExpansions,approvalCount,beginDeskLoading,resetDeskLoading,deskRequestLoading,setDeskJobLoading,api,stopAutoPreviews,loadContentPreview,waitForPreviewMedia,contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={renderScanProgress,scanCoverageValue,scanMeter,chooseContentGroup,openGroupPicker,closeGroupPicker,groupPickerKeydown,setCoverage:p=>{contentScanProgressData=p},setQueueBusy:setContentQueueBusy,renderContentQueue,setQueue:r=>{contentQueue=r},setGroupRows:r=>{contentGroupRows=r},setPersistentPreview:fn=>{persistentPostPreview=fn},prioritizeContentAccount,renderAccountScan,contentScanCoverage,renderAutoScanStatus,contentAccountLabel,contentGroupCount,contentGroupNumbers,setAssets:a=>{contentAssets=a},setProducers:p=>{producerList=p},renderProducers,loadProducerEligibleItems,getProducerExpansions:()=>producerExpansions,approvalCount,beginDeskLoading,resetDeskLoading,deskRequestLoading,setDeskJobLoading,api,stopAutoPreviews,loadContentPreview,waitForPreviewMedia,contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
  get('content-metric').value='views';get('content-layout').value='cards';get('content-keep-metric').value='weighted_score';get('content-weight-views').value='1';get('content-weight-likes').value='10';
  return {context,get,requests,api:context.inspectContent};
@@ -232,7 +232,7 @@ test('one gallery displays authoritative keep/remove decisions, all four metrics
  const {api,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',members:[{...post,delete_status:'published'},{...post,post_id:'p2',metrics:{views:300,likes:3,comments:2,shares:1},delete_status:'published'}]}]);get('content-group').value='0';get('content-keep-metric').value='views';api.renderContentGroup();
  const html=get('content-group-cards').innerHTML;const firstHeader=html.slice(html.indexOf('<header'),html.indexOf('</header>'));for(const value of ['Instagram','views','likes','comments','shares','100'])assert.ok(firstHeader.includes(value),value);assert.ok(!firstHeader.includes('caption'));assert.ok(html.indexOf('caption')>html.indexOf('post-info'));
  api.setPlan({group_id:'g',keep:['p2'],remove:[post],expires_at:new Date(Date.now()+60000).toISOString()});api.updateGroupPresentation();
- assert.equal(api.groupDecision(post).tone,'remove');assert.equal(api.groupDecision({...post,post_id:'p2'}).tone,'keep');assert.match(get('content-summary-g0').innerHTML,/Remove · proposed/);assert.match(get('content-summary-g1').innerHTML,/Keep · proposed/);assert.equal(get('content-plan-records').innerHTML,'');
+ assert.equal(api.groupDecision(post).tone,'remove');assert.equal(api.groupDecision({...post,post_id:'p2'}).tone,'keep');assert.match(get('content-summary-g0').innerHTML,/Marked for removal · preview/);assert.match(get('content-summary-g1').innerHTML,/Keep · proposed/);assert.equal(get('content-plan-records').innerHTML,'');
  api.clearContentPlan();assert.equal(api.groupDecision(post).tone,'neutral');
 });
 
@@ -400,11 +400,81 @@ test('account catch-up queues once, shows local loading and never queues deletio
  const pending=api.prioritizeContentAccount();await api.prioritizeContentAccount();
  assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/content/scan');assert.deepEqual(JSON.parse(requests[0].options.body),{platform:'instagram',account_id:'acct'});assert.equal(get('content-scan-account').disabled,true);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),true);
  finish({status:202,ok:true,json:async()=>({coverage:{eligible:50,fingerprinted:8,pending:42},scan_status:{enabled:true,prioritized:true}})});await pending;
- assert.equal(get('content-scan-account').textContent,'Account prioritised');assert.match(get('content-scan-notice').textContent,/catch-up priority/);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),false);
+ assert.equal(get('content-scan-account').textContent,'Earlier scan requested');assert.match(get('content-scan-notice').textContent,/moved ahead in the background scan queue/);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),false);
 });
 
 test('late account catch-up responses cannot repaint a locked session; local failures preserve evidence',async()=>{
  const {api,context,get}=setup();api.setToken('private');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',members:[post],scan_coverage:{eligible:50,pending:42},scan_status:{enabled:true}}]);get('content-group').value='0';
  let finish;context.fetch=()=>new Promise(resolve=>finish=resolve);const pending=api.prioritizeContentAccount();api.lock();finish({status:202,ok:true,json:async()=>({scan_status:{prioritized:true}})});await pending;
  assert.equal(api.getGroups().length,0);assert.equal(get('content-scan-notice').textContent,'');
+});
+
+test('deletion queue renders the shared gallery with scoped preview IDs and retains unverified links honestly',async()=>{
+ const {api,context,get,requests}=setup();api.setToken('private');api.setView('cleanup');
+ context.queueFixture=[{...post,media_type:'IMAGE',preview_available:true,status:'awaiting_sheet',reason:'confirmed_duplicate_plan',created_at:'2026-11-15T13:42:00Z'},{platform:'instagram',account_id:'',post_id:'',permalink:post.permalink,status:'sheet_listed_unverified',created_at:null}];
+ api.setQueue(context.queueFixture);api.renderContentQueue({limit:500,sheet_status:{mirror:{status:"failed",error_code:"google_http_400"}}});
+ const cards=get('content-queue-cards').innerHTML;assert.match(cards,/content-preview-q0/);assert.match(cards,/post-info-q0/);assert.match(cards,/Waiting for Sheet sync/);assert.match(cards,/Confirmed duplicate removal plan/);assert.match(cards,/Post identity has not been verified/);assert.doesNotMatch(cards,/data-preview="q1"/);assert.doesNotMatch(cards,/data-content-select=/);assert.match(get('content-queue-status').textContent,/google_http_400/);
+ await api.loadContentPreview('q1');assert.equal(requests.length,0);api.lock();assert.equal(get('content-queue-cards').innerHTML,'');
+});
+test('cached video posters stay visible until play and buffering remains visible while a thumbnail finishes',async()=>{
+ const {api,context,get}=loadingMediaFixture('video'),box=get('content-preview-g0');let plays=0;
+ context.posterRow={...post,media_type:'VIDEO',preview_type:'video',preview_url:'https://a.cdninstagram.com/video.mp4',poster_url:'https://a.cdninstagram.com/still.jpg',extras_ticket:'signed'};
+ api.setGroupRows([context.posterRow]);
+ api.setPersistentPreview(async(_row,_force,poster)=>poster?{kind:'image',url:'https://a.cdninstagram.com/still.jpg',available:true}:{kind:'video',url:'https://a.cdninstagram.com/video.mp4',available:true});
+ const pending=api.performContentPreview('g0');await flushLoading();const video=box.children[0],poster=box.children.find(n=>n.className==='video-poster'),cover=box.children.find(n=>n.className==='video-cover');video.play=()=>{plays++;return Promise.resolve()};
+ assert.equal(video.preload,'none');assert.equal(video.src,undefined);assert.equal(plays,0);assert.equal(box.dataset.loadingLabel,'Loading video thumbnail…');assert.ok(poster);assert.equal(poster.hidden,false);
+ cover.children[0].onclick();assert.equal(plays,1);assert.equal(video.src,'https://a.cdninstagram.com/video.mp4');assert.equal(poster.hidden,true);poster.onload();await pending;assert.equal(box.dataset.loadingLabel,'Buffering video…');assert.equal(box.classList.contains('preview-loading'),true);
+ video.onplaying();assert.equal(box.classList.contains('preview-loading'),false);assert.equal(cover.hidden,true);
+});
+test('missing video thumbnail has a visible Play action and a late poster cannot repaint a locked gallery',async()=>{
+ const {api,get,context}=loadingMediaFixture('video'),box=get('content-preview-g0');await api.performContentPreview('g0');
+ const cover=box.children.find(n=>n.className==='video-cover');assert.match(cover.children[0].textContent,/Play video/);assert.match(cover.children[1].textContent,/Thumbnail unavailable/);
+ context.posterRow={...post,media_type:'VIDEO',extras_ticket:'signed'};api.setGroupRows([context.posterRow]);let finish;
+ api.setPersistentPreview(async(_r,_f,poster)=>poster?new Promise(r=>{finish=r}):{kind:'video',url:'https://a.cdninstagram.com/clip.mp4'});
+ const pending=api.performContentPreview('g0');await flushLoading();api.lock();finish({kind:'image',url:'https://a.cdninstagram.com/late.jpg'});await pending;
+ assert.equal(box.children.some(n=>n.className==='video-poster'),false);
+});
+
+test('coverage cards use complete server totals, preserve platform scope and never derive overall progress from visible groups',()=>{
+ const {api,get}=setup();api.setGroups([{group_id:'g',platform:'instagram',account_id:'a',account_name:'@sample',members:[post],scan_coverage:{eligible:50,fingerprinted:44,pending:6}}]);get('content-group').value='0';
+ api.setCoverage({checked_at:'2026-11-15T17:33:00Z',totals:{eligible:200,fingerprinted:50,pending:150,accounts:3,accounts_with_posts:2,accounts_fingerprinted:0},accounts:[{platform:'instagram',account_id:'a',account_name:'@sample',eligible:50,fingerprinted:44,pending:6},{platform:'instagram',account_id:'no-group',account_name:'Without duplicate groups',eligible:150,fingerprinted:6,pending:144},{platform:'facebook',account_id:'empty',account_name:'Empty account',eligible:0,fingerprinted:0,pending:0}]});
+ api.renderScanProgress();const overall=get('content-scan-overall').innerHTML;assert.match(overall,/25<small>%/);assert.match(overall,/50 \/ 200/);assert.match(overall,/aria-valuemax="200" aria-valuenow="50"/);assert.match(get('content-scan-selected').innerHTML,/88<small>%/);assert.match(get('content-scan-accounts').innerHTML,/Without duplicate groups/);assert.match(get('content-scan-accounts').innerHTML,/No supported stored posts/);
+ get('content-group-platform').value='facebook';api.renderGroupOptions();api.renderContentGroup();assert.match(get('content-scan-overall').innerHTML,/50 \/ 200/);assert.match(get('content-scan-selected').innerHTML,/Choose a candidate group/);
+ api.setCoverage(null);api.renderScanProgress();assert.match(get('content-scan-overall').innerHTML,/Coverage unavailable/);assert.doesNotMatch(get('content-scan-overall').innerHTML,/role="progressbar"/);
+ api.setCoverage({totals:{eligible:0,fingerprinted:0,pending:0,accounts:0,accounts_with_posts:0,accounts_fingerprinted:0}});api.renderScanProgress();assert.match(get('content-scan-overall').innerHTML,/No supported stored posts/);assert.doesNotMatch(get('content-scan-overall').innerHTML,/100<small>%|NaN/);
+ assert.equal(api.scanCoverageValue({eligible:3,fingerprinted:4}),null);assert.equal(api.scanCoverageValue({eligible:10000,fingerprinted:9999}).percent,99.9);
+});
+
+test('group picker exposes per-account colour bars, escapes names, and selection performs no queue or scan action',()=>{
+ const {api,get,requests}=setup();api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'a',account_name:'<script>name</script>',media_type:'VIDEO',members:[post],scan_coverage:{eligible:50,fingerprinted:44,pending:6}},{group_id:'fb',platform:'facebook',account_id:'b',account_name:'Page',members:[],scan_coverage:{eligible:10,fingerprinted:10,pending:0}}]);api.renderGroupOptions();
+ const options=get('content-group-options').innerHTML;assert.match(options,/role="option"/);assert.match(options,/Account coverage · 88% · 44 \/ 50/);assert.match(options,/scan-meter-mini/);assert.match(options,/data-tone="complete"/);assert.match(options,/&lt;script&gt;name/);assert.doesNotMatch(options,/<script>/);
+ api.openGroupPicker();assert.equal(get('content-group-options').hidden,false);assert.equal(get('content-group-toggle').attributes['aria-expanded'],'true');
+ api.chooseContentGroup('0');assert.equal(get('content-group').value,'0');assert.equal(get('content-group-options').hidden,true);assert.match(get('content-group-picker-label').textContent,/88% scanned/);assert.equal(requests.length,0);
+ api.setQueueBusy(true);api.chooseContentGroup('1');api.openGroupPicker();assert.equal(get('content-group').value,'0');assert.equal(get('content-group-toggle').disabled,true);assert.equal(get('content-group-options').hidden,true);
+ api.setQueueBusy(false);get('content-group-platform').value='instagram';api.renderGroupOptions();api.chooseContentGroup('1');assert.equal(get('content-group').value,'0');assert.doesNotMatch(get('content-group-options').innerHTML,/Facebook/);
+});
+
+test('visual group picker supports keyboard navigation, escape and tab without changing selected identity',()=>{
+ const {api,get}=setup();api.setGroups([{group_id:'a',platform:'instagram',account_id:'a',members:[]},{group_id:'b',platform:'instagram',account_id:'b',members:[]}]);api.renderGroupOptions('a');let focused=-1;
+ const options=['alpha','bravo'].map((name,i)=>({dataset:{groupIndex:String(i)},getAttribute:k=>k==='aria-selected'?String(i===0):name,setAttribute(){},focus(){focused=i},closest(){return this}}));get('content-group-options').querySelectorAll=()=>options;get('content-group-toggle').focus=()=>{focused=2};
+ api.openGroupPicker();assert.equal(focused,0);const key=k=>api.groupPickerKeydown({key:k,target:options[Math.min(focused,1)],preventDefault(){}});
+ key('ArrowDown');assert.equal(focused,1);key('Home');assert.equal(focused,0);key('End');assert.equal(focused,1);key('ArrowDown');assert.equal(focused,0);key('b');assert.equal(focused,1);assert.equal(get('content-group').value,'0');
+ key('Escape');assert.equal(focused,2);assert.equal(get('content-group-options').hidden,true);api.openGroupPicker();key('Tab');assert.equal(get('content-group-options').hidden,true);
+ get('content-group-options').querySelectorAll=()=>[];api.openGroupPicker();get('content-group-toggle').listeners.keydown({key:'Escape',preventDefault(){}});assert.equal(get('content-group-options').hidden,true);
+});
+
+test('neutral cards omit a removal badge while proposed and confirmed removals retain precise labels',()=>{
+ const {api,get}=setup(),fresh={...post,delete_status:'published',cleanup_review:undefined};api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',members:[fresh]}]);get('content-group').value='0';
+ assert.doesNotMatch(api.gallerySummary(fresh,'g0',1),/Not marked|gallery-decision|Marked for removal/);
+ api.setPlan({group_id:'g',expires_at:new Date(Date.now()+60000).toISOString(),remove:[fresh],keep:[]});assert.match(api.gallerySummary(fresh,'g0',1),/Marked for removal · preview/);assert.match(api.gallerySummary(fresh,'g0',1),/Not queued; confirmation required/);
+ api.setPlan(null);assert.match(api.gallerySummary({...fresh,cleanup_review:{decision:'remove',queue_status:'awaiting_sheet'}},'g0',1),/Marked for removal · queued/);
+ assert.match(api.gallerySummary({...fresh,cleanup_review:{decision:'keep'}},'g0',1),/Kept in confirmed plan/);
+});
+
+test('failed refresh retains truthful coverage as delayed, recovery updates it, and lock clears all progress and picker content',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');let fail=false,count=44;
+ context.fetch=async path=>path==='/api/content/groups'&&fail?{status:503,ok:false,json:async()=>({error:'store_unavailable'})}:{status:200,ok:true,json:async()=>path==='/api/content/groups'?{rows:[],scan_progress:{checked_at:'2026-11-15T17:33:00Z',totals:{eligible:50,fingerprinted:count,pending:50-count,accounts:1,accounts_with_posts:1,accounts_fingerprinted:0},accounts:[]}}:{rows:[]}};
+ await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/44 \/ 50/);fail=true;await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/44 \/ 50/);assert.match(get('content-scan-overall').innerHTML,/Update delayed/);
+ fail=false;count=50;await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/100<small>%/);assert.doesNotMatch(get('content-scan-overall').innerHTML,/Update delayed/);
+ api.lock();for(const id of ['content-scan-overall','content-scan-selected','content-scan-accounts','content-group-options'])assert.equal(get(id).innerHTML,'');assert.equal(get('content-group-options').hidden,true);
 });

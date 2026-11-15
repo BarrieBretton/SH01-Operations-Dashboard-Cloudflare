@@ -47,6 +47,15 @@ function postRecord(x) {
  let fingerprint=null;if(x.fingerprint){const s=JSON.stringify(x.fingerprint);if(s.length>40000||!x.fingerprint.algorithm||!Number.isInteger(x.fingerprint.version))throw Error('invalid_fingerprint');fingerprint=s;}
  return {platform,account_id,post_id,permalink:canonicalPostURL(x.permalink,platform),account_handle:clean(x.account_handle,150),media_type:x.media_type,published_at,caption:clean(x.caption,2000),workflow_id:x.workflow_id?contentID(x.workflow_id):'',workflow_url:producerURL(x.workflow_url||''),preview_url,preview_type,metrics:metricObject(x.metrics),fingerprint};
 }
+function contentPoster(row,media){
+ if(!['VIDEO','REELS'].includes(row.media_type))return '';
+ const match=(media||[]).find(m=>m.platform===row.platform&&m.asset_id===row.account_id&&m.id===row.post_id);
+ const poster=contentPreview(match?.thumbnail_url||(row.preview_type==='image'?row.preview_url:''));
+ if(!poster||/\.(mp4|mov|m4v|webm)(?:$|[?])/i.test(poster))return '';
+ const original=contentPreview(row.preview_url);
+ if(row.preview_type==='video'&&original&&new URL(poster).pathname===new URL(original).pathname)return '';
+ return poster;
+}
 function publicPost(r) {return {...r,metrics:JSON.parse(r.metrics||'{}'),fingerprint:undefined,preview_url:contentPreview(r.preview_url)};}
 async function contentReady(env){return !!env.STORE;}
 function mergePostRecords(tx,records,at){
@@ -64,6 +73,18 @@ async function upsertPosts(env,posts,source='publisher'){
  });return {accepted:records.length,source,sheet_mirror:'pending'};
 }
 // Display-only account metadata. Internal identities and plan digests stay unchanged.
+// Coverage uses the complete stored catalogue, not the limited duplicate-group page.
+function contentScanProgress(tables,coverage){
+ if(typeof autoScanCoverage!=='function')return null;
+ const accounts=new Map(),key=r=>JSON.stringify([r.platform,r.account_id]);
+ const add=r=>{if(['facebook','instagram'].includes(r.platform)&&r.account_id&&!accounts.has(key(r)))accounts.set(key(r),{platform:r.platform,account_id:r.account_id,eligible:0,fingerprinted:0,pending:0});};
+ for(const a of tables.meta_assets||[])add({platform:a.platform,account_id:a.id});
+ for(const p of tables.content_posts||[])add(p);
+ for(const c of coverage)accounts.set(key(c),{...c});
+ const rows=[...accounts.values()].map(c=>({...c,...contentAccountName(c,tables.meta_assets,tables.content_posts)}));
+ const totals=rows.reduce((a,c)=>({eligible:a.eligible+c.eligible,fingerprinted:a.fingerprinted+c.fingerprinted,pending:a.pending+c.pending}),{eligible:0,fingerprinted:0,pending:0});
+ return {scope:'stored_supported_facebook_instagram_posts',checked_at:contentNow(),full_history_verified:false,totals:{...totals,accounts:rows.length,accounts_with_posts:rows.filter(c=>c.eligible>0).length,accounts_fingerprinted:rows.filter(c=>c.eligible>0&&c.pending===0).length},accounts:rows};
+}
 function contentAccountName(row,assets=[],posts=[]){
  const valid=value=>{const name=String(value||'').trim();return name&&name!==String(row.account_id)&&!/^\d{10,}$/.test(name)?name.slice(0,200):'';};
  const asset=assets.find(a=>a.platform===row.platform&&String(a.id)===String(row.account_id));
@@ -75,7 +96,7 @@ function contentAccountName(row,assets=[],posts=[]){
  return {account_name:'',account_name_source:'unavailable'};
 }
 async function contentList(env,u){
- const {tables}=await env.STORE.snapshot(['content_posts','meta_assets']);let rows=tables.content_posts.map(row=>({...row,...contentAccountName(row,tables.meta_assets)}));for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
+ const {tables}=await env.STORE.snapshot(['content_posts','meta_assets','meta_content']);let rows=tables.content_posts.map(row=>({...row,...contentAccountName(row,tables.meta_assets),poster_url:contentPoster(row,tables.meta_content)}));for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
  const q=(u.searchParams.get('q')||'').slice(0,100).toLowerCase();if(q)rows=rows.filter(r=>String(r.caption).toLowerCase().includes(q)||String(r.account_name||r.account_handle).toLowerCase().includes(q)||r.post_id.toLowerCase()===q);
  for(const key of ['from','to'])if(u.searchParams.get(key)){const v=u.searchParams.get(key);if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!iso(v))throw Error('invalid_date');const date=v+(key==='to'?'T23:59:59.999Z':'T00:00:00.000Z');rows=rows.filter(r=>r.published_at&&(key==='from'?r.published_at>=date:r.published_at<=date));}
  const limit=Math.min(100,Math.max(1,Math.trunc(Number(u.searchParams.get('limit'))||50))),offset=Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0));storeSort(rows,'-published_at','platform','account_id','post_id');return {rows:rows.slice(offset,offset+limit).map(publicPost),has_more:rows.length>offset+limit,next_offset:rows.length>offset+limit?offset+limit:null};
@@ -163,8 +184,8 @@ async function queueCleanup(env,b){
   p.payload=JSON.stringify({...data,confirmed_at:at});p.committed=1;return {confirmed_at:at,queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
  });
 }
-async function contentStatus(env){
- const {tables}=await env.STORE.snapshot(['content_jobs','content_sheet_outbox']);const counts={};for(const r of tables.content_sheet_outbox)counts[r.status]=(counts[r.status]||0)+1;
+async function contentStatus(env,tables=null){
+ if(!tables)({tables}=await env.STORE.snapshot(['content_jobs','content_sheet_outbox']));const counts={};for(const r of tables.content_sheet_outbox)counts[r.status]=(counts[r.status]||0)+1;
  return {storage_backend:'google_sheets',meta_sync:tables.content_jobs.find(r=>r.id==='meta_collect'),meta_sync_enabled:env.META_SYNC_ENABLED==='1',schema_ready:true,sheet_write_enabled:env.GOOGLE_SHEETS_WRITE_ENABLED==='1',post_sheet:POST_SHEET,clickouts_sheet:'clickouts',mirror:tables.content_jobs.find(r=>r.id==='sheet_mirror'),outbox:Object.entries(counts).map(([status,count])=>({status,count})),delete_execution:'requires_configured_executor',schedule_interval_minutes:10,meta_interval_seconds:Math.max(60,Math.min(3600,Number(env.META_SYNC_INTERVAL_SECONDS)||60))};
 }
 async function contentSheetWrite(env,token,path,data){
@@ -220,7 +241,7 @@ async function mirrorContentSheets(env){
 }
 async function contentApi(req,env,ctx) {
  const u=new URL(req.url),p=u.pathname;
- if(['/api/content/media','/api/content/comments'].includes(p)&&req.method==='POST')return contentExtrasApi(req,env);
+ if(['/api/content/media','/api/content/poster','/api/content/comments'].includes(p)&&req.method==='POST')return contentExtrasApi(req,env);
  if(p==='/api/content/status')return json(await contentStatus(env));
 
  if(p==='/api/ingest/posts'&&req.method==='POST')return json(await upsertPosts(env,(await body(req)).posts));
@@ -234,13 +255,18 @@ async function contentApi(req,env,ctx) {
  if(p==='/api/content/plan'&&req.method==='POST')return json(await planCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='POST')return json(await queueCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='GET'){
-  const rows=storeSort(await env.STORE.rows('content_deletion_queue'),'-created_at').slice(0,501);
-  const state=await sheetStatus(env),meta=await sourceMeta(env,state),sheet=meta?.clickouts;
+  const {tables}=await env.STORE.snapshot(['content_deletion_queue','content_posts','meta_assets','meta_content','content_jobs','content_sheet_outbox','sheet_sync_state','sheet_live_producers']);
+  const posts=new Map(tables.content_posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p]));
+  const rows=storeSort(tables.content_deletion_queue,'-created_at').slice(0,501).map(q=>{
+   const p=posts.get(JSON.stringify([q.platform,q.account_id,q.post_id])),verified=!!p&&p.permalink===q.permalink;
+   return {...(verified?{...publicPost(p),...contentAccountName(p,tables.meta_assets),poster_url:contentPoster(p,tables.meta_content)}:{}),...q,preview_available:verified&&p.delete_status!=='deleted',preview_unavailable_reason:!verified?'Post identity has not been verified. Open the original link.':p.delete_status==='deleted'?'Post is recorded as deleted.':''};
+  });
+  const state=tables.sheet_sync_state.find(s=>s.id===1)||{},metaRow=tables.sheet_live_producers.find(s=>s.version===state.active_version&&s.producer_id==='__producer_source_evidence_v2__'),sheet=metaRow?JSON.parse(metaRow.payload)?.clickouts:null;
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
-  return json({rows:rows.slice(0,500),limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env)});
+  const visible=rows.slice(0,500);const decorated=typeof extrasDecorate==='function'?await extrasDecorate(env,visible):visible;return json({rows:decorated,limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env,tables)});
  }
  if(p==='/api/content/scan'&&req.method==='POST')return json(await autoScanPrioritize(env,await body(req)),202);
- if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state']);const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[];const groups=storeSort(currentDuplicateGroups(tables.content_duplicate_groups),'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{const name=contentAccountName(group,tables.meta_assets,tables.content_posts);const scan_coverage=scanCoverage.find(a=>a.platform===group.platform&&a.account_id===group.account_id)||null;return {...group,...name,scan_coverage,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,group.platform,group.account_id):null,members:group.members.map(row=>({...row,...name}))};});if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
+ if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content']);const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[];const groups=storeSort(currentDuplicateGroups(tables.content_duplicate_groups),'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{const name=contentAccountName(group,tables.meta_assets,tables.content_posts);const scan_coverage=scanCoverage.find(a=>a.platform===group.platform&&a.account_id===group.account_id)||null;return {...group,...name,scan_coverage,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,group.platform,group.account_id):null,members:group.members.map(row=>({...row,...name,poster_url:contentPoster(row,tables.meta_content)}))};});if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported',scan_progress:contentScanProgress(tables,scanCoverage)});}
  if(p==='/api/content'&&req.method==='GET'){const data=await contentList(env,u);if(typeof extrasDecorate==='function')data.rows=await extrasDecorate(env,data.rows);return json(data);}
  if(p==='/api/content/series'&&req.method==='GET'){
   const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id')),id=contentID(u.searchParams.get('post_id')),metric=u.searchParams.get('metric');if(!CONTENT_METRICS.has(metric))throw Error('unsupported_metric');
