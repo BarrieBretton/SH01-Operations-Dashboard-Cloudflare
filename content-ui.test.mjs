@@ -10,7 +10,7 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={beginDeskLoading,resetDeskLoading,deskRequestLoading,setDeskJobLoading,api,stopAutoPreviews,loadContentPreview,waitForPreviewMedia,contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
  get('content-metric').value='views';get('content-layout').value='cards';get('content-keep-metric').value='weighted_score';get('content-weight-views').value='1';get('content-weight-likes').value='10';
  return {context,get,requests,api:context.inspectContent};
@@ -225,4 +225,79 @@ test('active plan cards and display sorting use backend score snapshots when sto
  api.setPlan({group_id:'g',metric:'weighted_score',keep:['post1'],remove:[{post_id:'p2'}],expires_at:new Date(Date.now()+60000).toISOString(),ranking:{weights:{views:1,likes:10},formula:'Views × 1 + Likes × 10',values:[{post_id:'post1',value:1500,inputs:{views:500,likes:100}},{post_id:'p2',value:300,inputs:{views:200,likes:10}}]}});
  get('content-group-order').value='metric-desc';api.updateGroupPresentation();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['post1','p2']);const header=get('content-summary-g0').innerHTML;assert.match(header,/1,500/);assert.match(header,/<dt>views<\/dt><dd>500<\/dd>/);assert.match(header,/<dt>likes<\/dt><dd>100<\/dd>/);assert.match(header,/Plan snapshot/);
  api.clearContentPlan();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['p2','post1']);assert.ok(!get('content-summary-g0').innerHTML.includes('Plan snapshot'));
+});
+
+const flushLoading=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
+test('every dashboard data route maps to a rendered local loading indicator',()=>{
+ const {api,get}=setup();
+ const cases=[
+  ['/api/failures','failure-loading'],['/api/failures?offset=100','failure-more-loading'],
+  ['/api/producers','producer-loading'],['/api/producer-sources','producer-sources-loading'],
+  ['/api/producers/1/items?offset=0','producer-items-loading'],['/api/producers/1/items?offset=100','producer-items-more-loading'],
+  ['/api/sheets/sync','producer-sync-loading',{}],['/api/content?limit=50','content-library-loading'],['/api/content?offset=50','content-more-loading'],
+  ['/api/content/series?post_id=a','content-compare-loading'],['/api/content/groups','content-groups-loading'],
+  ['/api/content/plan','content-plan-loading',{}],['/api/content/queue','content-queue-loading'],['/api/content/queue','content-confirm-loading',{}],
+  ['/api/content/sheets/setup','content-sheets-loading',{}],['/api/content/sheets/sync','content-sheets-loading',{}],
+  ['/api/meta/sync','meta-loading',{}],['/api/meta/status','meta-loading'],['/api/meta/assets','content-library-loading'],
+  ['/api/content/status','content-availability-loading'],['/api/meta/capabilities','content-availability-loading'],
+  ['/api/meta/coverage','content-availability-loading'],['/api/meta/account-observations','content-availability-loading']
+ ];
+ for(const [path,id,body] of cases){assert.ok(html.includes('id="'+id+'"'),id);const done=api.deskRequestLoading(path,body);assert.equal(get(id).classList.contains('is-loading'),true,path);assert.equal(get(id).classList.contains('hidden'),false,path);assert.ok(get(id).textContent);done();assert.equal(get(id).classList.contains('hidden'),true,path);}
+ api.setView('availability');const done=api.deskRequestLoading('/api/meta/assets');assert.equal(get('content-availability-loading').classList.contains('hidden'),false);done();
+ assert.match(html,/@media\(prefers-reduced-motion:reduce\)[^}]*animation:none/);
+});
+
+test('overlapping requests retain shared indicators and an old response cannot clear a newer load',async()=>{
+ const {api,context,get}=setup();api.setToken('private');const pending=[];context.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ const old=api.request('/api/content?limit=50');const rejected=assert.rejects(old,{name:'AbortError'});const next=api.request('/api/content?limit=50');
+ assert.equal(get('content-refresh').attributes['aria-busy'],'true');assert.equal(get('content-library-loading').classList.contains('hidden'),false);
+ pending[0]({status:200,ok:true,json:async()=>({rows:[]})});await rejected;assert.equal(get('content-refresh').classList.contains('is-loading'),true);
+ pending[1]({status:200,ok:true,json:async()=>({rows:[]})});await next;assert.equal(get('content-refresh').attributes['aria-busy'],undefined);assert.equal(get('content-library-loading').textContent,'');
+ const first=api.request('/api/content/series?post_id=a'),second=api.request('/api/content/series?post_id=b');
+ pending[2]({status:200,ok:true,json:async()=>({rows:[]})});await first;assert.equal(get('content-compare-loading').classList.contains('is-loading'),true);
+ pending[3]({status:200,ok:true,json:async()=>({rows:[]})});await second;assert.equal(get('content-compare-loading').classList.contains('hidden'),true);
+});
+
+test('HTTP failures, timeout and lock all clear loading while late completions preserve a replacement session',async()=>{
+ const {api,context,get}=setup();api.setToken('private');context.fetch=async()=>({status:503,ok:false,json:async()=>({error:'store_rate_limited'})});await assert.rejects(api.api('/api/failures'),/503/);assert.equal(get('failure-loading').classList.contains('hidden'),true);assert.equal(get('login-loading').classList.contains('hidden'),true);
+ const timers=[];context.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length};context.fetch=(_path,options)=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Cancelled','AbortError'))));
+ const timed=api.request('/api/content/groups');timers.find(x=>x.ms===25000).fn();await assert.rejects(timed,/timed out/);assert.equal(get('content-groups-loading').classList.contains('hidden'),true);
+ const pending=[];context.fetch=()=>new Promise(resolve=>pending.push(resolve));const old=api.request('/api/content/groups'),rejectOld=assert.rejects(old,{name:'AbortError'});api.lock();assert.equal(get('content-groups-loading').classList.contains('hidden'),true);
+ api.setToken('replacement');const next=api.request('/api/content/groups');pending[0]({ok:true,status:200,json:async()=>({rows:[]})});await rejectOld;assert.equal(get('content-groups-loading').classList.contains('is-loading'),true);pending[1]({ok:true,status:200,json:async()=>({rows:[]})});await next;assert.equal(get('content-groups-loading').classList.contains('hidden'),true);
+});
+
+test('producer refresh button stays animated until source evidence also finishes',async()=>{
+ const {api,context,get}=setup();api.setToken('private');let finish;context.fetch=async path=>path==='/api/producer-sources'?new Promise(resolve=>{finish=resolve}):{status:200,ok:true,json:async()=>({rows:[],sync:{status:'running'}})};
+ const loading=api.loadProducers();await flushLoading();assert.equal(get('producer-loading').classList.contains('hidden'),true);assert.equal(get('producer-sources-loading').classList.contains('is-loading'),true);assert.equal(get('refresh-producers').classList.contains('is-loading'),true);assert.equal(get('producer-job-loading').classList.contains('is-loading'),true);
+ finish({status:200,ok:true,json:async()=>({rows:[]})});await loading;assert.equal(get('refresh-producers').classList.contains('is-loading'),false);
+ api.setDeskJobLoading('producer-job-loading','',false);assert.equal(get('producer-job-loading').classList.contains('hidden'),true);
+});
+
+test('rate-limit cooldown shows waiting animation and cancellation removes it',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');context.fetch=async path=>path.includes('groups')?{status:503,ok:false,json:async()=>({error:'store_rate_limited'})}:{status:200,ok:true,json:async()=>({rows:[]})};
+ await api.loadCleanup();assert.match(get('content-groups-loading').textContent,/waiting for the scheduled retry/);assert.equal(get('content-cleanup-refresh').classList.contains('is-loading'),true);api.cancelCleanupRetry();assert.equal(get('content-groups-loading').classList.contains('hidden'),true);assert.equal(get('content-cleanup-refresh').classList.contains('is-loading'),false);
+});
+
+function loadingMediaFixture(kind='image'){
+ const result=setup(),{api,get,context}=result;api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',media_type:kind==='video'?'VIDEO':'IMAGE',members:[{...post,preview_type:kind,preview_url:'https://a.cdninstagram.com/media',media_type:kind==='video'?'REELS':'IMAGE'}]}]);get('content-group').value='0';api.renderContentGroup();return result;
+}
+test('image spinner remains through CDN loading and stops on load, error and timeout',async()=>{
+ const {api,get,context}=loadingMediaFixture();const box=get('content-preview-g0');const loading=api.performContentPreview('g0');await flushLoading();assert.equal(box.attributes['aria-busy'],'true');assert.equal(box.dataset.loadingLabel,'Loading image…');box.children[0].onload();await loading;assert.equal(box.classList.contains('preview-loading'),false);assert.equal(box.attributes['aria-busy'],undefined);
+ context.fetch=async()=>({status:200,ok:true,json:async()=>({available:true,kind:'image',url:'https://a.cdninstagram.com/fresh'})});const failed=api.performContentPreview('g0',true);await flushLoading();box.children[0].onerror();await failed;assert.equal(box.classList.contains('preview-loading'),false);assert.match(box.innerHTML,/Media unavailable/);
+ const timers=[];context.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length};const timed=api.performContentPreview('g0');await flushLoading();timers.find(x=>x.ms===12000).fn();await timed;assert.match(box.innerHTML,/Preview timed out/);assert.equal(box.classList.contains('preview-loading'),false);
+});
+
+test('video buffering animates, playback clears it and closed media cannot restart the indicator',async()=>{
+ const {api,get}=loadingMediaFixture('video'),box=get('content-preview-g0');const pending=api.performContentPreview('g0');await flushLoading();const video=box.children[0];assert.equal(box.dataset.loadingLabel,'Loading video preview…');video.onloadedmetadata();await pending;assert.equal(box.classList.contains('preview-loading'),false);
+ video.onwaiting();assert.equal(box.dataset.loadingLabel,'Buffering video…');video.onplaying();assert.equal(box.classList.contains('preview-loading'),false);
+ video.onstalled();assert.equal(box.classList.contains('preview-loading'),true);box.children.find(x=>x.className==='btn preview-close').onclick();assert.equal(box.classList.contains('preview-loading'),false);video.onwaiting();assert.equal(box.classList.contains('preview-loading'),false);
+});
+
+test('stopping previews clears both queued and active indicators and late media events cannot restore them',async()=>{
+ const {api,get}=loadingMediaFixture(),box=get('content-preview-g0');const pending=api.loadContentPreview('g0');assert.equal(box.classList.contains('preview-loading'),true);await flushLoading();const media=box.children[0];api.stopAutoPreviews();await pending;assert.equal(box.classList.contains('preview-loading'),false);media.onload();assert.equal(box.classList.contains('preview-loading'),false);
+});
+
+test('source collection request times out with local feedback and releases its spinner',async()=>{
+ const {api,get,context}=setup();api.setToken('private');const timers=[];context.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length};context.fetch=(_path,options)=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Stopped','AbortError'))));
+ const pending=get('sheet-sync-now').onclick();assert.equal(get('producer-sync-loading').classList.contains('is-loading'),true);timers.find(x=>x.ms===25000).fn();await pending;assert.equal(get('producer-sync-loading').classList.contains('hidden'),true);assert.equal(get('sheet-sync-now').disabled,false);assert.match(get('producer-sync-error').textContent,/timed out/);assert.equal(get('global-notice').textContent,'');
 });

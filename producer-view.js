@@ -15,7 +15,7 @@ async function loadProducerSnapshot(epoch){
  const stock=api('/api/producers').then(d=>{
   if(epoch!==authEpoch||!token)return;
   const signature=JSON.stringify(d.rows||[]);changed=producerRowsSignature!==signature;producerRowsSignature=signature;
-  producerList=d.rows||[];const health=d.sync||{};sourceAt=health.last_success||'';checkedAt=new Date().toISOString();
+  producerList=d.rows||[];const health=d.sync||{};setDeskJobLoading('producer-job-loading','Source collection '+(health.status==='running'?'running…':'queued · waiting for collection…'),['queued','running'].includes(health.status));sourceAt=health.last_success||'';checkedAt=new Date().toISOString();
   $('sheet-health').textContent='Source collection: '+(health.status||'never')+' · last successful collection: '+contentDate(sourceAt)+' · '+(health.stale?'STALE / UNVERIFIED':'within 30 minutes')+' · scheduled every 10 minutes'+(health.error_code?' · '+health.error_code:'');
   renderProducers();
   $('producer-refresh-status').textContent='Dashboard checked '+contentDate(checkedAt)+' · '+(changed?'Stored stock updated.':'Stored stock unchanged.')+' Checking source evidence…';

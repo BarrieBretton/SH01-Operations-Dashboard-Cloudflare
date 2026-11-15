@@ -66,3 +66,13 @@ html[data-theme=light]{--success:#17683b;--success-bg:#e4f5ec;--warn:#805100;--w
 
 /* Weighted review scores remain next to the raw metrics. */
 .gallery-metrics .gallery-score{grid-column:1/-1;display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 12px;padding:8px}.gallery-score dd{margin:0}.gallery-score small{grid-column:1/-1;color:var(--muted);font-size:11px}.score-formula{font-size:13px;color:var(--muted);margin:10px 0}.score-formula:empty{display:none}
+
+/* Shared request indicators: CSS only, no external images or network requests. */
+@keyframes desk-spin{to{transform:rotate(360deg)}}
+.loading-indicator{display:flex;align-items:center;gap:10px;min-height:24px;margin:12px 0;color:var(--muted);font-size:13px}
+.loading-indicator.is-loading::before,button.is-loading::before{content:"";display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:desk-spin .8s linear infinite;flex-shrink:0;vertical-align:middle}
+button.is-loading::before{margin-right:8px}button.is-loading{cursor:progress}
+.media-preview.preview-loading::before{content:"";position:absolute;left:calc(50% - 17px);top:calc(50% - 38px);width:30px;height:30px;border:3px solid #7ddac7;border-right-color:transparent;border-radius:50%;animation:desk-spin .8s linear infinite;z-index:4;pointer-events:none;box-shadow:0 0 0 7px #101a24d9}
+.media-preview.preview-loading::after{content:attr(data-loading-label);position:absolute;left:12px;right:12px;top:calc(50% + 8px);padding:8px;text-align:center;color:#edf7ff;background:#101a24eb;border-radius:8px;font-size:12px;z-index:4;pointer-events:none}
+.media-preview.preview-loading>.preview-placeholder{visibility:hidden}
+@media(prefers-reduced-motion:reduce){.loading-indicator.is-loading::before,button.is-loading::before,.media-preview.preview-loading::before{animation:none}}
