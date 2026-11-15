@@ -26,7 +26,8 @@ async function scannerAccounts(env){
 async function scannerPosts(env,u){
  const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id'));
  const after=u.searchParams.get('after')||'';if(after)contentID(after);
- const rows=(await scannerSnapshot(env)).content_posts.filter(r=>r.platform===platform&&r.account_id===account&&r.delete_status==='published'&&(!after||r.post_id>after)).sort((a,b)=>a.post_id<b.post_id?-1:a.post_id>b.post_id?1:0);
+ const selection=u.searchParams.has('post_ids')?u.searchParams.get('post_ids').split(','):null;if(selection&&(after||!selection.length||selection.length>20||new Set(selection).size!==selection.length||selection.some(id=>!id||contentID(id)!==id)))throw Error('invalid_targeted_posts');
+ const rows=(await scannerSnapshot(env)).content_posts.filter(r=>r.platform===platform&&r.account_id===account&&r.delete_status==='published'&&(!selection||selection.includes(r.post_id))&&(!after||r.post_id>after)).sort((a,b)=>a.post_id<b.post_id?-1:a.post_id>b.post_id?1:0);
  const selected=rows.slice(0,20).map(r=>({platform:r.platform,account_id:r.account_id,post_id:r.post_id,media_type:r.media_type,scan_kind:scannerKind(r),permalink:r.permalink,account_handle:r.account_handle,published_at:r.published_at,caption:r.caption,workflow_id:r.workflow_id,workflow_url:r.workflow_url}));
  return {rows:selected,next_after:rows.length>20?selected.at(-1).post_id:null,source:'dashboard_catalogue',full_history_verified:false};
 }

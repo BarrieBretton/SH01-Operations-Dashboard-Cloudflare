@@ -156,3 +156,21 @@ test('name fallback cannot borrow another platform or account name',async()=>{
  let response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].account_name,'');assert.equal(response.rows[0].account_name_source,'unavailable');
  await s.c.upsertPosts(s.env,[post(1,{account_handle:'Stored Instagram name'})]);response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].account_name,'Stored Instagram name');assert.equal(response.rows[0].account_name_source,'stored_post');
 });
+
+test('larger verified groups supersede displayed subsets without deleting confirmed review history',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,[post(1),post(2),post(3)]);
+ const base={platform:'instagram',account_id:'12345',media_type:'IMAGE',algorithm:'sh01-social-perceptual',evidence:{method:'complete_link_candidate_cluster',version:1}};
+ await s.c.ingestGroups(s.env,[{...base,group_id:'small',members:['1','2']}]);
+ const plan=await s.c.planCleanup(s.env,{group_id:'small',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation});
+ await s.c.ingestGroups(s.env,[{...base,group_id:'large',members:['1','2','3']}]);
+ const data=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
+ assert.deepEqual(Array.from(data.rows,r=>r.group_id),['large']);assert.equal(data.rows[0].has_confirmed_history,true);assert.equal(data.rows[0].members.find(r=>r.post_id==='1').cleanup_review.decision,'remove');
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_duplicate_groups').get().n,2);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_cleanup_plans WHERE committed=1').get().n,1);
+});
+
+test('subset display filtering never crosses platform, account or fingerprint algorithm version',()=>{
+ const s=setup(),base={group_id:'small',platform:'instagram',account_id:'1',media_type:'VIDEO',algorithm:'sh01-social-perceptual',members:'["a","b"]',evidence:'{"method":"complete_link_candidate_cluster","version":1}'};
+ for(const extra of [{platform:'facebook'},{account_id:'2'},{media_type:'IMAGE'},{evidence:'{"method":"complete_link_candidate_cluster","version":2}'},{algorithm:'other'}]){
+  s.ctx.groups=[base,{...base,...extra,group_id:'large',members:'["a","b","c"]'}];assert.equal(vm.runInContext('currentDuplicateGroups(groups).length',s.ctx),2);
+ }
+});
