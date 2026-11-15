@@ -192,7 +192,7 @@ test('storage throttling automatically retries at most twice and stops when the 
 });
 
 test('keep strategy validation and server errors stay beside the plan controls and clear on retry',async()=>{
- const {api,get,context}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';get('content-keep-metric').value='views';
+ const {api,get,context}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post,{...post,post_id:'second'}]}]);get('content-group').value='0';get('content-keep-metric').value='views';
  await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/explicit keep strategy/);assert.equal(get('content-keep-count').attributes['aria-invalid'],'true');assert.equal(get('content-error-cleanup').textContent,'');assert.equal(get('global-notice').textContent,'');
  get('content-keep-count').value='1';get('content-keep-strategy').value='best';get('content-keep-count').listeners.input();assert.equal(get('content-error-plan').textContent,'');assert.equal(get('content-keep-count').attributes['aria-invalid'],undefined);
  context.fetch=async()=>({status:400,ok:false,json:async()=>({error:'missing_metrics'})});await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/missing_metrics/);assert.equal(get('content-error-cleanup').textContent,'');
@@ -224,13 +224,13 @@ test('feedback opens its containing disclosure and comparison actions appear onl
 });
 
 test('changing keep controls ignores an obsolete pending plan error',async()=>{
- const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post]}]);get('content-group').value='0';get('content-keep-metric').value='views';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',members:[post,{...post,post_id:'second'}]}]);get('content-group').value='0';get('content-keep-metric').value='views';get('content-keep-count').value='1';get('content-keep-strategy').value='best';
  let finish;context.fetch=()=>new Promise(resolve=>{finish=resolve});const pending=get('content-plan').onclick();get('content-keep-count').value='2';get('content-keep-count').listeners.input();finish({status:400,ok:false,json:async()=>({error:'old_plan_error'})});await pending;assert.equal(get('content-error-plan').textContent,'');assert.equal(api.getPlan(),null);
 });
 
 test('one gallery displays authoritative keep/remove decisions, all four metrics and platform outside details',()=>{
  const {api,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',members:[{...post,delete_status:'published'},{...post,post_id:'p2',metrics:{views:300,likes:3,comments:2,shares:1},delete_status:'published'}]}]);get('content-group').value='0';get('content-keep-metric').value='views';api.renderContentGroup();
- const html=get('content-group-cards').innerHTML;const firstHeader=html.slice(html.indexOf('<header'),html.indexOf('</header>'));for(const value of ['Instagram','views','likes','comments','shares','100'])assert.ok(firstHeader.includes(value),value);assert.ok(!firstHeader.includes('caption'));assert.ok(html.indexOf('caption')>html.indexOf('post-info'));
+ const html=get('content-group-cards').innerHTML;const firstHeader=html.slice(html.indexOf('<header'),html.indexOf('</header>'));for(const value of ['Instagram','views','likes','comments','shares','300'])assert.ok(firstHeader.includes(value),value);assert.ok(!firstHeader.includes('caption'));assert.ok(html.indexOf('caption')>html.indexOf('post-info'));
  api.setPlan({group_id:'g',keep:['p2'],remove:[post],expires_at:new Date(Date.now()+60000).toISOString()});api.updateGroupPresentation();
  assert.equal(api.groupDecision(post).tone,'remove');assert.equal(api.groupDecision({...post,post_id:'p2'}).tone,'keep');assert.match(get('content-summary-g0').innerHTML,/Marked for removal · preview/);assert.match(get('content-summary-g1').innerHTML,/Keep · proposed/);assert.equal(get('content-plan-records').innerHTML,'');
  api.clearContentPlan();assert.equal(api.groupDecision(post).tone,'neutral');
@@ -400,7 +400,7 @@ test('account catch-up queues once, shows local loading and never queues deletio
  const pending=api.prioritizeContentAccount();await api.prioritizeContentAccount();
  assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/content/scan');assert.deepEqual(JSON.parse(requests[0].options.body),{platform:'instagram',account_id:'acct'});assert.equal(get('content-scan-account').disabled,true);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),true);
  finish({status:202,ok:true,json:async()=>({coverage:{eligible:50,fingerprinted:8,pending:42},scan_status:{enabled:true,prioritized:true}})});await pending;
- assert.equal(get('content-scan-account').textContent,'Earlier scan requested');assert.match(get('content-scan-notice').textContent,/moved ahead in the background scan queue/);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),false);
+ assert.equal(get('content-scan-account').textContent,'Earlier scan requested');assert.match(get('content-scan-notice').textContent,/Earlier scan requested · 42 pending/);assert.equal(get('content-scan-notice').classList.contains('loading-indicator'),false);
 });
 
 test('late account catch-up responses cannot repaint a locked session; local failures preserve evidence',async()=>{
@@ -447,9 +447,9 @@ test('coverage cards use complete server totals, preserve platform scope and nev
 
 test('group picker exposes per-account colour bars, escapes names, and selection performs no queue or scan action',()=>{
  const {api,get,requests}=setup();api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'a',account_name:'<script>name</script>',media_type:'VIDEO',members:[post],scan_coverage:{eligible:50,fingerprinted:44,pending:6}},{group_id:'fb',platform:'facebook',account_id:'b',account_name:'Page',members:[],scan_coverage:{eligible:10,fingerprinted:10,pending:0}}]);api.renderGroupOptions();
- const options=get('content-group-options').innerHTML;assert.match(options,/role="option"/);assert.match(options,/Account coverage · 88% · 44 \/ 50/);assert.match(options,/scan-meter-mini/);assert.match(options,/data-tone="complete"/);assert.match(options,/&lt;script&gt;name/);assert.doesNotMatch(options,/<script>/);
+ const options=get('content-group-options').innerHTML;assert.match(options,/role="option"/);assert.match(options,/44\/50 · 88%/);assert.match(options,/scan-meter-mini/);assert.match(options,/data-tone="complete"/);assert.match(options,/&lt;script&gt;name/);assert.doesNotMatch(options,/<script>/);
  api.openGroupPicker();assert.equal(get('content-group-options').hidden,false);assert.equal(get('content-group-toggle').attributes['aria-expanded'],'true');
- api.chooseContentGroup('0');assert.equal(get('content-group').value,'0');assert.equal(get('content-group-options').hidden,true);assert.match(get('content-group-picker-label').textContent,/88% scanned/);assert.equal(requests.length,0);
+ api.chooseContentGroup('0');assert.equal(get('content-group').value,'0');assert.equal(get('content-group-options').hidden,true);assert.match(get('content-group-picker-label').textContent,/88%/);assert.equal(requests.length,0);
  api.setQueueBusy(true);api.chooseContentGroup('1');api.openGroupPicker();assert.equal(get('content-group').value,'0');assert.equal(get('content-group-toggle').disabled,true);assert.equal(get('content-group-options').hidden,true);
  api.setQueueBusy(false);get('content-group-platform').value='instagram';api.renderGroupOptions();api.chooseContentGroup('1');assert.equal(get('content-group').value,'0');assert.doesNotMatch(get('content-group-options').innerHTML,/Facebook/);
 });
@@ -512,7 +512,7 @@ test('wrong-account detail data cannot replace the selected group or enable its 
 
 test('post metrics show collection reasons without pretending they are still loading; numeric zero remains numeric',()=>{
  const {api}=setup(),p={...post,metrics:{views:0},metric_status:{views:{status:'available'},likes:{status:'permission_required'},comments:{status:'not_returned'},shares:{status:'unsupported'}}};
- const html=api.gallerySummary(p,'g0',1);assert.match(html,/metric-value[^>]*>0<\/span>/);assert.match(html,/Access needed/);assert.match(html,/Not provided/);assert.match(html,/Not supported/);assert.match(html,/Needs likes before/);assert.match(html,/Why some counts are unavailable/);assert.doesNotMatch(html,/loading-indicator|Unknown/);
+ const html=api.gallerySummary(p,'g0',1);assert.match(html,/metric-value[^>]*>0<\/span>/);assert.match(html,/Access needed/);assert.match(html,/Not provided/);assert.match(html,/Not supported/);assert.match(html,/Needs likes before/);assert.doesNotMatch(html,/Why some counts are unavailable/);assert.match(api.contentGalleryCard(p,'g0'),/Why some counts are unavailable/);assert.doesNotMatch(html,/loading-indicator|Unknown/);
  const saved=api.contentMetricMarkup({...p,metrics:{likes:12},metric_status:{likes:{status:'available',refresh_status:'failed'}}},'likes');assert.match(saved,/>12<\/span>/);assert.match(saved,/Saved · refresh check failed/);
  const injection=api.contentMetricMarkup({...p,metric_status:{likes:{status:'<script>secret</script>'}}},'likes');assert.doesNotMatch(injection,/<script>|secret/);
 });
@@ -531,4 +531,50 @@ test('metric action errors and late responses cannot affect another group or a r
  assert.doesNotMatch(get('content-metrics-notice').textContent,/store_rate_limited/);assert.equal(get('content-metrics-refresh').disabled,false);assert.equal(get('global-notice').textContent,'');
  get('content-group').value='0';api.renderContentGroup();assert.match(get('content-metrics-notice').textContent,/store_rate_limited/);
  const previous=resolve;await api.requestGroupMetrics();assert.equal(resolve,previous);a._metricRetryAt=0;const old=api.requestGroupMetrics();api.lock();api.setToken('replacement');resolve({ok:true,status:202,json:async()=>({pending:2,message:'old response'})});await old;assert.equal(get('content-metrics-notice').textContent,'');
+});
+
+
+test('compact picker shows each account coverage once with short group rows and full accessible identities',()=>{
+ const {api,get}=setup(),groups=Array.from({length:8},(_,i)=>({group_id:'g'+i,platform:'instagram',account_id:'a',account_name:'@aand.cut',media_type:'VIDEO',members:[post],scan_coverage:{eligible:50,fingerprinted:44,pending:6},has_confirmed_history:i===0}));
+ api.setGroups(groups);api.renderGroupOptions();const markup=get('content-group-options').innerHTML;
+ assert.equal((markup.match(/class="group-picker-heading"/g)||[]).length,1);assert.equal((markup.match(/class="group-account-coverage"/g)||[]).length,1);assert.equal((markup.match(/role="option"/g)||[]).length,8);
+ const labels=Array.from(markup.matchAll(/class="group-option-name">([^<]*)</g),m=>m[1]);assert.equal(labels.length,8);assert.equal(labels[0],'Group 1 · 1 video');assert.ok(labels.every(x=>!x.includes('Instagram')&&!x.includes('@aand')));
+ assert.match(markup,/44\/50 · 88%/);assert.match(markup,/aria-label="Instagram · @aand.cut · Group 1 · 1 video · Previously confirmed/);assert.match(markup,/group-option-reviewed">Reviewed/);assert.doesNotMatch(markup,/posts fingerprinted<|Account coverage ·|group-option-coverage/);
+});
+
+test('first group render is already highest-first and a plan cannot silently override numeric ordering',()=>{
+ const {api,get,requests}=setup();const members=[{...post,post_id:'low',metrics:{views:10,likes:0},cleanup_review:undefined},{...post,post_id:'high',metrics:{views:20,likes:20},cleanup_review:undefined},{...post,post_id:'missing',metrics:{likes:9},cleanup_review:undefined}];
+ api.setGroups([{group_id:'g',members}]);get('content-group').value='0';api.renderContentGroup();const cards=get('content-group-cards').innerHTML;assert.ok(cards.indexOf('id="content-card-g1"')<cards.indexOf('id="content-card-g0"'));assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['high','low','missing']);
+ api.setPlan({group_id:'g',metric:'weighted_score',keep:['low'],remove:[{post_id:'high'}],expires_at:new Date(Date.now()+60000).toISOString()});api.updateGroupPresentation();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['high','low','missing']);
+ get('content-group-order').value='decision';api.updateGroupPresentation();assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['low','high','missing']);
+ get('content-keep-metric').value='likes';get('content-keep-metric').listeners.change();assert.equal(api.getPlan(),null);assert.equal(get('content-group-order').value,'metric-desc');assert.deepEqual(Array.from(api.orderedGroupEntries(),x=>x.row.post_id),['high','missing','low']);assert.equal(requests.length,0);
+});
+
+test('rank changes move the same video cards immediately, retain ascending preference and put unavailable metrics last',()=>{
+ const {api,get,requests}=setup(),members=[{...post,post_id:'a',metrics:{views:1000,likes:1,shares:0},cleanup_review:undefined},{...post,post_id:'b',metrics:{views:100,likes:100,shares:3},cleanup_review:undefined},{...post,post_id:'c',metrics:{views:0,likes:0},cleanup_review:undefined}];
+ api.setGroups([{group_id:'g',members}]);get('content-group').value='0';api.renderContentGroup();const container=get('content-group-cards'),cards=members.map((_,i)=>get('content-card-g'+i));container.children=[...cards];
+ for(const card of cards){card.parentNode=container;card.video={currentTime:14,paused:false};}
+ container.moveBefore=(card,before)=>{container.children.splice(container.children.indexOf(card),1);const n=before?container.children.indexOf(before):container.children.length;container.children.splice(n,0,card);};
+ get('content-keep-metric').value='views';get('content-keep-metric').listeners.change();assert.deepEqual(container.children,cards);
+ get('content-keep-metric').value='likes';get('content-keep-metric').listeners.input();assert.deepEqual(container.children,[cards[1],cards[0],cards[2]]);
+ get('content-group-order').value='metric-asc';get('content-group-order').listeners.change();assert.deepEqual(container.children,[cards[2],cards[0],cards[1]]);
+ get('content-keep-metric').value='shares';get('content-keep-metric').listeners.change();assert.equal(get('content-group-order').value,'metric-asc');assert.deepEqual(container.children,[cards[0],cards[1],cards[2]]);
+ assert.ok(cards.every(c=>c.video.currentTime===14&&!c.video.paused));assert.equal(requests.length,0);
+});
+
+test('compact review retains local feedback and confirmation safeguards while moving explanations into disclosures',()=>{
+ const {api,get}=setup();assert.match(html,/id="content-group-order"><option value="metric-desc" selected>/);assert.match(html,/id="content-review-help"[^>]*><summary>Review help/);assert.doesNotMatch(html,/id="content-review-help"[^>]*open/);assert.match(html,/Confirming writes links to the deletion queue/);
+ api.setGroups([{group_id:'g',platform:'instagram',account_id:'a',members:[{...post,cleanup_review:undefined}]}]);get('content-group').value='0';api.renderContentGroup();assert.equal(get('content-metrics-notice').textContent,'');
+ const p={...post,metrics:{views:3,likes:1},metric_status:{shares:{status:'permission_required'}},cleanup_review:undefined},markup=api.contentGalleryCard(p,'g0');assert.doesNotMatch(markup.slice(0,markup.indexOf('</header>')),/metric-explanation/);assert.ok(markup.indexOf('metric-explanation')>markup.indexOf('class="post-info"'));assert.match(markup,/Why some counts are unavailable/);
+});
+
+
+test('all ranking metrics validate locally and a server rejection clears the building notice',async()=>{
+ const {api,get,requests,context}=setup();api.setToken('private');api.setView('cleanup');const members=[{...post,cleanup_review:undefined,delete_status:'published',metrics:{views:4,likes:1}},{...post,post_id:'two',cleanup_review:undefined,delete_status:'published',metrics:{views:3,likes:2}}];api.setGroups([{group_id:'g',platform:'instagram',members}]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';get('content-keep-metric').value='reach';api.renderContentGroup();
+ assert.match(get('content-plan-readiness').textContent,/0\/2 available/);await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/reach unavailable for 2\/2/);assert.equal(requests.length,0);
+ get('content-keep-metric').value='views';get('content-keep-metric').listeners.change();context.fetch=async()=>({status:400,ok:false,json:async()=>({error:'missing_ranking_metrics'})});await get('content-plan').onclick();assert.match(get('content-error-plan').textContent,/latest stored views counts are incomplete/);assert.equal(get('content-plan-notice').textContent,'');assert.equal(api.getPlan(),null);
+});
+test('queue repair has local loading and errors and submits only the existing Sheet job',async()=>{
+ const {api,get,requests,context}=setup();api.setToken('private');api.setView('cleanup');api.setQueue([{...post,request_id:'q',status:'awaiting_sheet',sheet_delivery:{status:'pending',error_code:'prepare_meta-posts-to-id:google_http_400'}}]);api.renderContentQueue({sheet_status:{sheet_write_enabled:true,mirror:{status:'failed',error_code:'google_http_400'}}});assert.match(get('content-queue-cards').innerHTML,/Sheet sync failed/);assert.equal(get('content-queue-sync').classList.contains('hidden'),false);
+ let resolve;context.fetch=(path,options)=>{requests.push({path,options});return new Promise(r=>resolve=r)};const pending=get('content-queue-sync').onclick();assert.equal(get('content-queue-loading').classList.contains('is-loading'),true);resolve({ok:false,status:400,json:async()=>({error:'sheet_writes_disabled'})});await pending;assert.match(get('content-error-queue').textContent,/sheet_writes_disabled/);assert.equal(get('content-error-sheets').textContent,'');assert.equal(get('content-queue-loading').classList.contains('is-loading'),false);assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/content/sheets/sync');
 });

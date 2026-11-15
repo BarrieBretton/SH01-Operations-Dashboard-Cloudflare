@@ -78,3 +78,49 @@ test('failed metadata refresh cannot silently mark queued counts as collected',a
  await s.ctx.run(s.env);const states=s.db.prepare("SELECT payload FROM content_collect_state WHERE id LIKE 'meta:refresh:%'").all().map(r=>JSON.parse(r.payload));assert.equal(states.filter(r=>r.status==='failed').length,2);
  const response=await s.ctx.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].members[0].metric_status.likes.status,'permission_required');assert.equal(response.rows[0].metric_refresh.failed,2);
 });
+
+
+async function instagramMetricFixture(s,enabled=true){
+ const now=new Date().toISOString();s.env.META_SYNC_ENABLED=enabled?'1':'0';
+ const posts=['201','202'].map(id=>({platform:'instagram',account_id:'200',post_id:id,permalink:'https://www.instagram.com/reel/test'+id+'/',media_type:'REELS',metrics:{likes:4,comments:0}}));
+ await s.ctx.upsertPosts(s.env,posts);await s.ctx.ingestGroups(s.env,[{group_id:'ig',platform:'instagram',account_id:'200',media_type:'VIDEO',members:posts.map(p=>p.post_id),algorithm:'fixture',evidence:{}}]);
+ await s.env.STORE.put('meta_assets',{id:'200',platform:'instagram',name:'@account',page_id:'100',updated_at:now});
+ for(const p of posts)await s.env.STORE.put('meta_content',{id:p.post_id,asset_id:'200',platform:'instagram',kind:'REELS',first_seen:now,last_seen:now});
+ const calls=[];let omitShares=false;
+ s.ctx.fetch=async u=>{const url=new URL(u),id=url.pathname.split('/').at(-1),query=url.searchParams;calls.push(url);let data;
+ if(u.includes('/me/accounts'))data={data:[{id:'100',name:'Page',access_token:'private',instagram_business_account:{id:'200'}}]};
+ else if(u.includes('/insights'))data={data:(query.get('metric')||'').split(',').filter(m=>!omitShares||m!=='shares').map(m=>({name:m,values:[{value:{views:123,shares:0,reach:99,saved:2}[m]??5}]}))};
+ else if(u.includes('/published_posts')||u.includes('/media'))data={data:[]};
+ else data={id,media_type:'VIDEO',media_product_type:'REELS',permalink:'https://www.instagram.com/reel/test'+id+'/',like_count:4,comments_count:0,timestamp:now};
+ return {ok:true,status:200,json:async()=>data};};return {calls,omit:()=>omitShares=true};
+}
+test('automatic duplicate metrics catch-up collects Instagram views shares and reach in bounded combined requests',async()=>{
+ const s=setup(),f=await instagramMetricFixture(s);const r=await s.ctx.run(s.env);assert.equal(r.phase,'metrics_backfill');assert.equal(r.media,2);assert.ok(f.calls.length<=12);
+ const insights=f.calls.filter(u=>u.pathname.endsWith('/insights'));assert.equal(insights.length,2);assert.ok(insights.every(u=>['views','shares','reach'].every(m=>u.searchParams.get('metric').split(',').includes(m))));
+ const rows=s.db.prepare("SELECT metrics FROM content_posts WHERE platform='instagram'").all();for(const row of rows){const m=JSON.parse(row.metrics);assert.equal(m.views,123);assert.equal(m.shares,0);assert.equal(m.reach,99);assert.equal(m.likes,4);}
+ assert.notEqual((await s.ctx.run(s.env)).phase,'metrics_backfill');assert.equal(s.db.prepare('SELECT count(*) n FROM content_deletion_queue').get().n,0);
+});
+test('explicit metric refresh includes the selected rank and cannot report omitted shares as collected',async()=>{
+ const s=setup(),f=await instagramMetricFixture(s,false);f.omit();await s.ctx.metaQueueGroupMetrics(s.env,{group_id:'ig',metric:'reach'});await s.ctx.run(s.env);
+ const requests=s.db.prepare("SELECT payload FROM content_collect_state WHERE id LIKE 'meta:refresh:%'").all().map(r=>JSON.parse(r.payload));assert.ok(requests.every(r=>r.required.includes('reach')&&r.status==='failed'&&r.missing.includes('shares')));
+ const caps=s.db.prepare("SELECT * FROM meta_capabilities WHERE metric='shares'").all();assert.ok(caps.every(c=>c.status==='unavailable'&&c.reason.includes('no_numeric')));assert.ok(s.db.prepare('SELECT metrics FROM content_posts').all().every(r=>JSON.parse(r.metrics).shares===undefined));
+});
+test('combined insight rejection isolates unsupported metrics without fan-out on permissions or rate limits',async()=>{
+ const s=setup(),specs=['views','shares','reach'].map(metric=>({metric})),seen=[],budget={calls:0,deadline:Date.now()+80000};
+ const read=async(id,token,params)=>{budget.calls++;seen.push(params.metric);if(params.metric.includes(','))throw Object.assign(Error('bad metric'),{category:'metric_unsupported'});if(params.metric==='shares')throw Object.assign(Error('unsupported'),{category:'metric_unsupported'});return {data:[{name:params.metric,values:[{value:0}]}]};};
+ const values=await s.ctx.metaReadMediaInsights(read,'201','private',specs,budget);assert.equal(values.get('views').value.value,0);assert.equal(values.get('reach').value.value,0);assert.equal(values.get('shares').error.category,'metric_unsupported');assert.equal(seen.length,4);
+ for(const reason of ['permission_denied','rate_limited']){let calls=0;const result=await s.ctx.metaReadMediaInsights(async()=>{calls++;throw Object.assign(Error('safe'),{category:reason})},'201','private',specs,{calls:0,deadline:Date.now()+80000});assert.equal(calls,1);assert.ok([...result.values()].every(r=>r.error.category===reason));}
+});
+test('fresh unavailable metrics are not hammered and a budget deferral can recover after a minute',()=>{
+ const s=setup(),at=new Date().toISOString(),caps=[{asset_id:'201',kind:'REELS',metric:'views',status:'unavailable',reason:'metric_unsupported',checked_at:at},{asset_id:'201',kind:'REELS',metric:'shares',status:'unavailable',reason:'meta_request_budget',checked_at:new Date(Date.now()-61000).toISOString()}];
+ const due=s.ctx.metaMediaDue('instagram','REELS','201',caps,{});assert.ok(!due.some(s=>s.metric==='views'));assert.ok(due.some(s=>s.metric==='shares'));
+});
+
+
+test('a failed count refresh retains old numeric values without reporting a successful refresh',async()=>{
+ const s=setup(),f=await instagramMetricFixture(s,false);f.omit();
+ await s.ctx.upsertPosts(s.env,['201','202'].map(id=>({platform:'instagram',account_id:'200',post_id:id,permalink:'https://www.instagram.com/reel/test'+id+'/',media_type:'REELS',metrics:{views:4,shares:7,reach:3}})));
+ await s.ctx.metaQueueGroupMetrics(s.env,{group_id:'ig'});await s.ctx.run(s.env);
+ const requests=s.db.prepare("SELECT payload FROM content_collect_state WHERE id LIKE 'meta:refresh:%'").all().map(r=>JSON.parse(r.payload));assert.ok(requests.every(r=>r.status==='failed'&&r.failed_metrics.includes('shares')));
+ assert.ok(s.db.prepare('SELECT metrics FROM content_posts').all().every(r=>JSON.parse(r.metrics).shares===7));
+});

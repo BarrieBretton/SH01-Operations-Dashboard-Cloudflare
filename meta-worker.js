@@ -19,8 +19,30 @@ function metaCatalog(platform,kind){
  if(kind==='page')return [{metric:'followers_count',field:'followers_count',params:{}}].concat(PAGE_METRICS.map(metric=>({metric,params:{period:'day'}})));
  return (platform==='instagram'?IG_METRICS[kind]||[]:['post_media_view','post_reactions_by_type_total']).map(metric=>({metric,params:{},alias:metric==='post_media_view'?'views':metric}));
 }
-function metaDue(catalog,id,kind,capabilities,now=Date.now()){
- return catalog.map(spec=>({spec,row:capabilities.find(r=>r.asset_id===id&&r.kind===kind&&r.metric===(spec.key||spec.metric))})).filter(({row})=>!row||now-Date.parse(row.checked_at)>= (row.status==='available'?3600000:/metric_unsupported/.test(row.reason)?604800000:3600000)).sort((a,b)=>String(a.row?.checked_at||'').localeCompare(String(b.row?.checked_at||''))).slice(0,2).map(x=>x.spec);
+function metaDue(catalog,id,kind,capabilities,now=Date.now(),limit=2){
+ return catalog.map(spec=>({spec,row:capabilities.find(r=>r.asset_id===id&&r.kind===kind&&r.metric===(spec.key||spec.metric))})).filter(({row})=>!row||now-Date.parse(row.checked_at)>= (row.status==='available'?3600000:/budget|rate_limited|network_unavailable/.test(row.reason)?60000:/metric_unsupported/.test(row.reason)?604800000:3600000)).sort((a,b)=>String(a.row?.checked_at||'').localeCompare(String(b.row?.checked_at||''))).slice(0,limit).map(x=>x.spec);
+}
+// Core counts share one Insights request. Extra metrics retain bounded rotation.
+function metaMediaDue(platform,kind,id,capabilities,metrics={},requested=[]){
+ const catalog=metaCatalog(platform,kind),due=metaDue(catalog,id,kind,capabilities,Date.now(),100);
+ const priority=[...new Set([...requested,'views','shares','reach'])];
+ const rank=spec=>{const m=spec.alias||spec.metric,n=priority.indexOf(m);return n<0?100:n+(typeof metrics[m]==='number'?20:0);};
+ return due.sort((a,b)=>rank(a)-rank(b)).slice(0,platform==='instagram'?4:2);
+}
+async function metaReadMediaInsights(call,id,token,specs,budget){
+ const result=new Map();if(!specs.length)return result;
+ if(specs.length>1){
+  try{const data=await call(id+'/insights',token,{metric:specs.map(s=>s.metric).join(',')});
+   for(const spec of specs){try{result.set(spec.metric,{value:metaObservation((data.data||[]).find(x=>x.name===spec.metric))});}catch(e){result.set(spec.metric,{error:e});}}return result;
+  }catch(e){
+   if(!['metric_unsupported','invalid_parameter_or_object'].includes(metaReason(e))){for(const spec of specs)result.set(spec.metric,{error:e});return result;}
+  }
+ }
+ for(const spec of specs){
+  if(budget.blockedUntil>Date.now()||budget.calls>=12||Date.now()>budget.deadline){result.set(spec.metric,{error:Error(budget.blockedUntil>Date.now()?'rate_limited_or_unavailable':'meta_request_budget')});continue;}
+  try{const data=await call(id+'/insights',token,{metric:spec.metric});result.set(spec.metric,{value:metaObservation((data.data||[]).find(x=>x.name===spec.metric))});}
+  catch(e){result.set(spec.metric,{error:e});if(/credential_rejected|permission_denied|rate_limited/.test(metaReason(e))){for(const next of specs)if(!result.has(next.metric))result.set(next.metric,{error:e});break;}}
+ }return result;
 }
 function metaObservation(entry){
  const scalar=entry?.total_value?.value??entry?.values?.at(-1)?.value;
@@ -64,9 +86,13 @@ async function metaDiscoverNamedAccounts(call,token,state){
 function metaRefreshKey(p){return 'meta:refresh:'+p.platform+':'+p.account_id+':'+p.post_id;}
 async function metaQueueGroupMetrics(env,input){
  metaCredential(env.META_SYSVAR);const id=contentID(input.group_id);let response;
+ const requested=input.metric==='weighted_score'?Object.entries(cleanupScoreWeights(input.weights)).filter(([,w])=>w>0).map(([m])=>m):input.metric?[input.metric]:[];
+ if(requested.some(m=>!CONTENT_METRICS.has(m)))throw Error('unsupported_ranking_metric');
+ let required;
  await env.STORE.transact(['content_duplicate_groups','content_posts','meta_content','content_collect_state'],tx=>{
   const group=groupFromTables(currentDuplicateGroups(tx.rows('content_duplicate_groups')),tx.rows('content_posts'),id);
   if(!['facebook','instagram'].includes(group.platform))throw Error('metrics_platform_unavailable');
+  required=[...new Set([...requested,'views','shares',...(group.platform==='instagram'?['reach']:[])])];
   const media=tx.rows('meta_content'),rows=group.members.filter(p=>p.delete_status==='published'&&media.some(m=>m.id===p.post_id&&m.platform===p.platform&&m.asset_id===p.account_id));
   if(!rows.length)throw Error('metrics_need_meta_collection');
   let queued=0,pending=0,cooling=0;
@@ -74,7 +100,7 @@ async function metaQueueGroupMetrics(env,input){
    const key=metaRefreshKey(p),previous=JSON.parse(tx.find('content_collect_state',{id:key})?.payload||'{}');
    if(previous.status==='queued'){pending++;continue;}
    if(Date.now()-Date.parse(previous.requested_at||'')<900000){cooling++;continue;}
-   tx.put('content_collect_state',{id:key,payload:JSON.stringify({platform:p.platform,account_id:p.account_id,post_id:p.post_id,status:'queued',requested_at:contentNow(),nonce:crypto.randomUUID()})});queued++;pending++;
+   tx.put('content_collect_state',{id:key,payload:JSON.stringify({platform:p.platform,account_id:p.account_id,post_id:p.post_id,required,status:'queued',requested_at:contentNow(),nonce:crypto.randomUUID()})});queued++;pending++;
   }
   if(queued)tx.put('content_collect_state',{id:'request:meta_collect',payload:JSON.stringify({requested_at:contentNow(),nonce:crypto.randomUUID()})});
   response={queued,pending,cooling,eligible:rows.length,scope:'selected_group',message:pending?'Metrics refresh queued. Background collection checks two posts per batch. Refresh groups to read the results.':'These posts were recently requested. Wait 15 minutes between requests; refresh groups to read the latest result.'};
@@ -102,10 +128,10 @@ async function metaFacebookCounts(call,id,token,capabilities,budget){
 async function metaSync(env){
  await contentReady(env);const db=env.STORE,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=crypto.randomUUID();
  if(!await db.claim('content_jobs','meta_collect',lease,600000))return {status:'already_running'};
- let state={},asset=null,phase='discovery',refreshBatch=[],pendingRefresh=[];
+ let state={},asset=null,phase='discovery',refreshBatch=[],pendingRefresh=[],backfillBatch=[];
  const budget={calls:0,deadline:Date.now()+80000},call=(p,t,q)=>graph(p,t,q,version,budget);
  try{
-  const {tables}=await db.snapshot(['meta_assets','meta_content','meta_capabilities','content_collect_state']);
+  const {tables}=await db.snapshot(['meta_assets','meta_content','meta_capabilities','content_collect_state','content_posts','content_duplicate_groups']);
   state=JSON.parse(tables.content_collect_state.find(r=>r.id==='meta')?.payload||'{}');
   pendingRefresh=tables.content_collect_state.filter(r=>r.id.startsWith('meta:refresh:')).map(r=>({...JSON.parse(r.payload),key:r.id})).filter(r=>r.status==='queued').sort((a,b)=>a.requested_at.localeCompare(b.requested_at));
   if(Date.parse(state.next_attempt||'')>Date.now()){await db.transact(['content_jobs','content_collect_state'],tx=>{const job=tx.find('content_jobs',{id:'meta_collect'});if(job?.lease!==lease)return;Object.assign(job,{status:'deferred',lease:null,lease_until:null});});return {status:'deferred',next_attempt:state.next_attempt};}
@@ -122,10 +148,17 @@ async function metaSync(env){
   asset=assets.sort((a,b)=>String(state[a.id]?.attempted_at||'').localeCompare(String(state[b.id]?.attempted_at||'')))[0];
   const requested=pendingRefresh.find(r=>assets.some(a=>a.id===r.account_id&&a.platform===r.platform));
   if(requested&&!state.last_metric_refresh){asset=assets.find(a=>a.id===requested.account_id&&a.platform===requested.platform);refreshBatch=pendingRefresh.filter(r=>r.platform===asset.platform&&r.account_id===asset.id).slice(0,2);}
-  state.last_metric_refresh=refreshBatch.length>0;
+  if(!refreshBatch.length&&!state.last_metric_refresh&&env.META_SYNC_ENABLED==='1'){
+   const grouped=new Set(tables.content_duplicate_groups.flatMap(g=>JSON.parse(g.members).map(id=>JSON.stringify([g.platform,g.account_id,id]))));
+   const posts=new Map(tables.content_posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p]));
+   const gaps=tables.meta_content.filter(m=>{const key=JSON.stringify([m.platform,m.asset_id,m.id]),p=posts.get(key);if(!grouped.has(key)||!p||p.delete_status!=='published'||m.kind==='STORY')return false;const metrics=JSON.parse(p.metrics||'{}');const wanted=(m.platform==='instagram'?['views','shares','reach']:['views','shares']).filter(k=>typeof metrics[k]!=='number').map(k=>({metric:m.platform==='facebook'&&k==='views'?'post_media_view':k}));return metaDue(wanted,m.id,m.kind,capabilities,Date.now(),100).length>0;}).sort((a,b)=>{const time=m=>JSON.parse(tables.content_collect_state.find(r=>r.id==='meta:post:'+m.id)?.payload||'{}').checked_at||'';return time(a).localeCompare(time(b))||a.id.localeCompare(b.id);});
+   const first=gaps.find(m=>assets.some(a=>a.id===m.asset_id&&a.platform===m.platform)&&!(/credential_rejected|permission_denied/.test(state[m.asset_id]?.last_error||'')&&Date.now()-Date.parse(state[m.asset_id]?.attempted_at)<3600000));
+   if(first){asset=assets.find(a=>a.id===first.asset_id&&a.platform===first.platform);backfillBatch=gaps.filter(m=>m.asset_id===asset.id&&m.platform===asset.platform).slice(0,2);}
+  }
+  state.last_metric_refresh=refreshBatch.length>0||backfillBatch.length>0;
   const st=state[asset.id]||{};state[asset.id]=st;st.attempted_at=contentNow();
   const phases=asset.platform==='instagram'?['recent','history','account','revisit','stories']:['recent','history','account','revisit'];
-  phase=refreshBatch.length?'metrics_refresh':phases[(st.turn||0)%phases.length];if(!refreshBatch.length)st.turn=(st.turn||0)+1;st.phase=phase;
+  phase=refreshBatch.length?'metrics_refresh':backfillBatch.length?'metrics_backfill':phases[(st.turn||0)%phases.length];if(!refreshBatch.length&&!backfillBatch.length)st.turn=(st.turn||0)+1;st.phase=phase;
   const pageId=asset.page_id||asset.id;let accountToken=freshTokens.get(pageId);
   if(!accountToken){const auth=await call(pageId,token,{fields:'id,access_token'});accountToken=auth.access_token||token;}
   const stats={status:'ok',asset_id:asset.id,platform:asset.platform,phase,media:0,metric_failures:0,api_version:version,collection:'bounded_incremental',history_complete:!!st.history_complete,more_available:false};
@@ -142,8 +175,8 @@ async function metaSync(env){
   }else{
    const fields=asset.platform==='instagram'?'id,media_type,media_product_type,timestamp,caption,permalink,thumbnail_url,media_url,like_count,comments_count':'id,created_time,message,permalink_url,full_picture';
    let items=[];
-   if(phase==='revisit'||phase==='metrics_refresh'){
-    const candidates=tables.meta_content.filter(r=>r.asset_id===asset.id&&r.platform===asset.platform&&r.kind!=='STORY'&&(!refreshBatch.length||refreshBatch.some(q=>q.post_id===r.id))).sort((a,b)=>{const time=r=>JSON.parse(tables.content_collect_state.find(x=>x.id==='meta:post:'+r.id)?.payload||'{}').checked_at||'';return time(a).localeCompare(time(b))||a.id.localeCompare(b.id)}).slice(0,2);
+   if(phase==='revisit'||phase==='metrics_refresh'||phase==='metrics_backfill'){
+    const candidates=tables.meta_content.filter(r=>r.asset_id===asset.id&&r.platform===asset.platform&&r.kind!=='STORY'&&(!refreshBatch.length||refreshBatch.some(q=>q.post_id===r.id))&&(!backfillBatch.length||backfillBatch.some(q=>q.id===r.id))).sort((a,b)=>{const time=r=>JSON.parse(tables.content_collect_state.find(x=>x.id==='meta:post:'+r.id)?.payload||'{}').checked_at||'';return time(a).localeCompare(time(b))||a.id.localeCompare(b.id)}).slice(0,2);
     for(const r of candidates){try{const fetched=await call(r.id,accountToken,{fields});if(String(fetched.id)!==r.id)throw Error('metric_post_identity_mismatch');items.push(fetched);}catch(e){extraState.push({id:'meta:post:'+r.id,payload:JSON.stringify({checked_at:contentNow(),error:metaReason(e)})});stats.metric_failures++;}}
    }else if(phase!=='history'||!st.history_complete){
     const edge=asset.platform==='instagram'?(phase==='stories'?'stories':'media'):'published_posts',cursor=phase==='history'?st.after:phase==='stories'?st.story_after:null;
@@ -162,7 +195,17 @@ async function metaSync(env){
      for(const [metric,reason] of Object.entries(counts.errors)){stats.metric_failures++;capabilityRows.push({asset_id:id,kind,metric,status:'unavailable',reason,checked_at:at});}
     }else for(const metric of ['likes','comments'])if(metrics[metric]===undefined)capabilityRows.push({asset_id:id,kind,metric,status:'unavailable',reason:'metric_not_returned',checked_at:at});
     for(const [metric,value] of Object.entries(metrics)){snapshotRows.push({asset_id:id,kind,metric,observed_at:at,value,source_period:'lifetime'});capabilityRows.push({asset_id:id,kind,metric,status:'available',reason:version+'; object field',checked_at:at});}
-    for(const spec of metaDue(metaCatalog(asset.platform,kind).slice().sort((a,b)=>Number(!['views','shares'].includes(a.alias||a.metric))-Number(!['views','shares'].includes(b.alias||b.metric))),id,kind,[...capabilities,...capabilityRows])){const v=await probe(id,kind,spec);if(v!==null&&CONTENT_METRICS.has(spec.alias||spec.metric))metrics[spec.alias||spec.metric]=v;}
+    const oldPost=tables.content_posts.find(p=>p.platform===asset.platform&&p.account_id===asset.id&&p.post_id===id),known={...JSON.parse(oldPost?.metrics||'{}'),...metrics};
+    const due=metaMediaDue(asset.platform,kind,id,[...capabilityRows,...capabilities],known,refreshBatch.find(q=>q.post_id===id)?.required||[]);
+    if(asset.platform==='instagram'){
+     const results=await metaReadMediaInsights(call,id,accountToken,due,budget);
+     for(const spec of due){const r=results.get(spec.metric),metric=spec.alias||spec.metric;
+      if(r?.error){stats.metric_failures++;capabilityRows.push({asset_id:id,kind,metric,status:'unavailable',reason:version+'; '+metaReason(r.error),checked_at:at});continue;}
+      if(r?.value?.value!==undefined){if(CONTENT_METRICS.has(metric))metrics[metric]=r.value.value;snapshotRows.push({asset_id:id,kind,metric,observed_at:at,value:r.value.value,source_period:'lifetime'});}
+      if(r?.value?.breakdowns)extraState.push({id:'meta:breakdown:'+id+':'+metric,payload:JSON.stringify({asset_id:id,kind,metric,observed_at:at,source_period:'lifetime',...r.value})});
+      capabilityRows.push({asset_id:id,kind,metric,status:'available',reason:version+'; lifetime',checked_at:at});
+     }
+    }else for(const spec of due){const v=await probe(id,kind,spec);if(v!==null&&CONTENT_METRICS.has(spec.alias||spec.metric))metrics[spec.alias||spec.metric]=v;}
     mediaRows.push({id,asset_id:asset.id,platform:asset.platform,kind,published_at:item.timestamp||item.created_time||'',caption:clean(item.caption||item.message,1200),permalink:producerURL(item.permalink||item.permalink_url||''),thumbnail_url:contentPreview(item.thumbnail_url||item.full_picture||item.media_url),first_seen:at,last_seen:at});
     extraState.push({id:'meta:post:'+id,payload:JSON.stringify({checked_at:at})});
     const permalink=item.permalink||item.permalink_url;if(permalink){try{posts.push(postRecord({platform:asset.platform,account_id:asset.id,account_handle:asset.name,post_id:id,permalink,media_type:kind,published_at:item.timestamp||item.created_time,caption:item.caption||item.message||'',preview_url:item.media_url||item.full_picture||item.thumbnail_url,preview_type:item.media_url&&['VIDEO','REELS'].includes(kind)?'video':'image',metrics}));}catch{capabilityRows.push({asset_id:id,kind,metric:'registry_permalink',status:'unavailable',reason:'unsupported_canonical_permalink',checked_at:at});}}
@@ -175,7 +218,7 @@ async function metaSync(env){
    const job=tx.find('content_jobs',{id:'meta_collect'});if(job.lease!==lease||job.lease_until<Date.now())throw Error('store_job_lease_lost');
    for(const row of assetRows)tx.put('meta_assets',row);for(const row of mediaRows)tx.put('meta_content',{...row,first_seen:tx.find('meta_content',{id:row.id})?.first_seen||row.first_seen});
    for(const row of snapshotRows)tx.put('meta_snapshots',row);for(const row of capabilityRows)tx.put('meta_capabilities',row);for(const row of extraState)tx.put('content_collect_state',row);
-   for(const q of refreshBatch){const row=tx.find('content_collect_state',{id:q.key}),current=JSON.parse(row?.payload||'{}');if(current.nonce!==q.nonce)continue;const post=posts.find(p=>p.post_id===q.post_id),failure=extraState.find(s=>s.id==='meta:post:'+q.post_id);const reason=failure?JSON.parse(failure.payload).error:null;row.payload=JSON.stringify({...current,status:post?'checked':'failed',checked_at:at,error:reason||(post?null:'metric_post_unavailable')});}
+   for(const q of refreshBatch){const row=tx.find('content_collect_state',{id:q.key}),current=JSON.parse(row?.payload||'{}');if(current.nonce!==q.nonce)continue;const post=posts.find(p=>p.post_id===q.post_id),failure=extraState.find(s=>s.id==='meta:post:'+q.post_id);const reason=failure?JSON.parse(failure.payload).error:null;const required=current.required||['views','shares',...(q.platform==='instagram'?['reach']:[])],attempts=[...capabilityRows,...capabilities].filter(c=>c.asset_id===q.post_id),failed=required.filter(m=>attempts.find(c=>(c.metric==='post_media_view'?'views':c.metric)===m)?.status==='unavailable'),deferred=failed.some(m=>/budget|rate_limited|network_unavailable/.test(attempts.find(c=>(c.metric==='post_media_view'?'views':c.metric)===m)?.reason||'')),old=tables.content_posts.find(p=>p.platform===q.platform&&p.account_id===q.account_id&&p.post_id===q.post_id),values={...JSON.parse(old?.metrics||'{}'),...post?.metrics},missing=required.filter(m=>typeof values[m]!=='number');row.payload=JSON.stringify({...current,status:deferred?'queued':post&&!missing.length&&!failed.length?'checked':'failed',checked_at:at,missing,failed_metrics:failed,error:reason||(failed.length?'metric_refresh_failed':missing.length?'metrics_unavailable':post?null:'metric_post_unavailable')});}
    mergePostRecords(tx,posts,at);tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});Object.assign(job,{status:stats.status,last_success:at,error_code:null,lease:null,lease_until:null});
   });console.log(JSON.stringify({event:'meta_collection_result',...result}));return stats;
  }catch(e){const reason=metaReason(e);if(budget.blockedUntil)state.next_attempt=new Date(budget.blockedUntil).toISOString();await db.transact(['content_jobs','content_collect_state'],tx=>{const job=tx.find('content_jobs',{id:'meta_collect'});if(job?.lease!==lease)return;for(const q of refreshBatch.length?refreshBatch:pendingRefresh){const row=tx.find('content_collect_state',{id:q.key}),current=JSON.parse(row?.payload||'{}');if(current.nonce===q.nonce)row.payload=JSON.stringify({...current,status:'failed',checked_at:contentNow(),error:reason});}if(asset)state[asset.id].last_error=reason;tx.put('content_collect_state',{id:'meta',payload:JSON.stringify(state)});Object.assign(job,{status:'failed',error_code:reason,lease:null,lease_until:null});});throw Error(reason);}

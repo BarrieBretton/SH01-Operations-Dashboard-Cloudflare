@@ -678,3 +678,116 @@ selection/session responses. Existing group index, media, cleanup and storage
 checks still pass. No authenticated live Meta counts were fetched during this
 work; the exact reason for the operator's missing counts remains unverified until
 the new response is deployed and read. Public HTML marker: metric-evidence-v1.
+
+
+## Compact duplicate review and explicit metric sorting — 16 November 2026
+
+The operator requested a denser candidate picker and automatic Rank by ordering.
+The supplied screenshot already shows weighted scores descending (38,304, 24,381,
+17,812). Source inspection found that the old default, Plan order / highest first,
+switched to keep/remove sequence when a preview plan existed. Rank and weight
+controls listened only for input events. No live ordering failure was reproduced.
+
+The picker now shows platform/account once per bucket, with one inline coverage
+ratio, percentage and short bar. Group rows contain only group number, media count
+and an optional Reviewed badge. Full account identity and coverage remain in
+accessible labels; keyboard navigation, platform/account isolation, stable group
+identity, the complete index and lazy detail loading are retained. Desktop rows
+have a 32px minimum height and coarse-pointer rows a 44px minimum.
+
+Highest first is the default gallery order. Keep / remove plan is an explicit
+alternative. Rank and weight changes handle both input and change events and
+return a selected plan order to metric order while invalidating its unconfirmed
+plan. An explicitly chosen ascending order persists. Initial card HTML is already
+ranked, subsequent changes move existing media nodes, unavailable values remain
+last, and numeric zero remains numeric. Active plans retain authoritative score
+snapshots. Sorting makes no request and never creates a plan or queues removals.
+
+Coverage cards and review controls use tighter spacing and concise status labels.
+Repeated guidance is under Review help. Formula/settings, account/metric refresh
+and legend/header share rows. Missing-count explanations move inside the existing
+post info panel so they do not independently displace a card's thumbnail. Local
+errors, loading indicators, retry messages and the explicit queue confirmation
+warning remain visible at their relevant controls.
+
+Validation: 261 JavaScript tests and four Python completion checks passed locally.
+Regression checks cover compact account buckets, accessible full labels, sorted
+first render, explicit plan ordering, change/input handling, missing metrics last,
+ascending preference and retaining video nodes during reordering. Chromium could
+not launch in this environment; real-browser appearance remains a deployment
+check. No deployment or production-data operation was performed. Public HTML
+marker: compact-rank-v1.
+
+
+## Counts, plan diagnostics and clickouts delivery — 16 November 2026
+
+Supersedes the unapplied compact-rank-v1 installer; this combined update targets
+the operator's applied a4862f5 dashboard and retains the compact UI changes.
+Operator-observed: two Instagram cards lack views, one lacks shares; Reach
+planning returns missing_metrics_or_already_queued_member; nine confirmed
+requests await a Sheet mirror reporting google_http_400. The exact live Meta
+response and the failing Google read/token stage cannot be inferred from these
+screenshots. No live credentials, provider calls or production Sheet changes
+were used in this investigation.
+
+Source-confirmed metric defects: only two insight candidates were probed per
+post per visit; a requested refresh could become checked after metadata loaded
+without all required counts. Missing counts in duplicate groups had no dedicated
+catch-up priority. Instagram now fetches up to four due scalar insight metrics
+in one request, prioritizing the selected ranking, views, shares and reach. A
+metric/parameter rejection falls back to individual requests within the existing
+twelve-call/eighty-second budget. Permission, credential and rate failures do
+not fan out. Numeric zero is preserved; absent data is never converted to zero.
+The ordinary scheduler alternates bounded duplicate-count catch-up with normal
+collection, two posts per batch, while honoring metric/provider cooldowns. The
+account's browser need not remain open. Existing scan algorithms are unchanged.
+Explicit refresh stores required metrics, and records missing/failed metrics;
+budget/rate deferrals remain pending. Old numeric values survive failed reads
+without turning a failed refresh into success. Instagram organic views are not
+replaced with reach, crossposted or promoted/boosted totals.
+
+Provider reference checked: Meta Instagram Media Insights documents views,
+shares and reach, comma-separated metric requests, unavailable empty responses
+and possible data delays up to 48 hours:
+https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights
+Existing configured Graph version and credentials remain in force. Permissions,
+actual provider availability and a live recovery time remain unverified.
+
+Planning now validates every selected metric, not only weighted score. It shows
+per-metric availability counts, distinguishes already-queued posts from missing
+counts, validates the keep count locally and clears Building on failure without
+letting stale responses clear a newer operation. Required-count and explicit
+confirmation protections remain intact; no partial group is silently selected
+for removal. Reach is distinct from views.
+
+Source-confirmed mirror defects: every batch read meta-posts-to-id even for
+clickouts; one operation per batch let mapping work delay confirmed removals;
+clickouts rows contained URLS only. The mirror now prioritizes pending confirmed
+removals, processes at most ten outbox records, prepares only the relevant tab
+and uses its actual grid width for reads. It creates a missing destination tab
+and adds required headers under the existing write flag. Existing workflow
+columns and values are retained. clickouts exports URLS, platform, account_id,
+post_id, request_id and queued_at as RAW values; large identifiers remain strings.
+An existing matching URL receives identity in blank owned columns. Conflicting
+identities fail closed; keep decisions are not exported as removals. Confirmation
+queues the existing mirror job for the scheduler. No executor or deletion
+schedule is introduced, and a synced row is not proof of deletion.
+
+A definitive 4xx append rejection returns records to pending. Network and 5xx
+ambiguity remains uncertain. A later matching Sheet row can reconcile delivery;
+an absent uncertain row is never blindly appended again, because a consumer may
+already have removed it. Pending work takes precedence over uncertain items so
+they cannot starve new confirmed work. Diagnostics record authorization, tab
+preparation, update, append or delivery-record stage without raw provider bodies.
+Queue cards expose failed/uncertain delivery, and Retry Sheet sync queues only
+the existing outbox with local loading/errors and session guards.
+Google append reference: https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/append
+
+Validation: 273 JavaScript tests and four Python completion checks passed locally,
+including combined Instagram counts, automatic catch-up, missing versus zero,
+failed refresh retaining historical values, unsupported-field isolation, local
+Reach blocking, cleared plan progress, missing mapping-tab independence, batch
+clickouts, identity enrichment, large text IDs and ambiguous delivery recovery.
+The installer retains complete preflight, backups and idempotent LF/CRLF support.
+Live API counts, workbook contents and browser appearance remain deployment
+checks. Public marker: compact-rank-v2. No new environment variables are required.

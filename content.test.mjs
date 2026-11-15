@@ -36,7 +36,7 @@ test('Explicit best/worst keep policy selects exactly n-k and no defaults',async
  await assert.rejects(s.c.planCleanup(s.env,{group_id:'g',keep_count:2,metric:'views'}),/explicit/);
 });
 test('Missing ranking metrics block cleanup; stale preview and wrong confirmation block queue',async()=>{
- const s=setup();await group(s);await assert.rejects(s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'shares'}),/missing_metrics/);
+ const s=setup();await group(s);await assert.rejects(s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'shares'}),/missing_ranking_metrics/);
  const p=await s.c.planCleanup(s.env,{group_id:'g',keep_count:2,keep_strategy:'best',metric:'views'});
  await assert.rejects(s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:'YES'}),/confirmation/);
  await s.c.upsertPosts(s.env,[post(4,{metrics:{views:10}})]);await assert.rejects(s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation}),/changed/);
@@ -55,9 +55,9 @@ test('Read pagination and series explicitly distinguish missing from zero',async
 });
 test('Ambiguous clickouts write is quarantined instead of automatically re-appended',async()=>{
  const s=setup();await group(s);const p=await s.c.planCleanup(s.env,{group_id:'g',keep_count:3,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});
- // Isolate clickouts: production handles one outbox row per invocation.
+ // Isolate the ambiguous clickouts append.
  s.sql.prepare("UPDATE content_sheet_outbox SET status='synced' WHERE kind='post'").run();
- s.ctx.sheetToken=async()=> 'private-access';s.ctx.readSheet=async(_e,_t,title)=>title==='clickouts'?[['URLS']]:[['record_key','platform','account_id','account_handle','post_id','permalink','media_type','published_at','workflow_id','workflow_url','first_seen','last_seen','delete_status']];
+ s.ctx.sheetJSON=async u=>u.includes('/values/')?{values:[['URLS']]}:{sheets:[{properties:{title:'clickouts',sheetId:1,gridProperties:{columnCount:26}}}]};s.ctx.sheetToken=async()=> 'private-access';s.ctx.readSheet=async(_e,_t,title)=>title==='clickouts'?[['URLS']]:[['record_key','platform','account_id','account_handle','post_id','permalink','media_type','published_at','workflow_id','workflow_url','first_seen','last_seen','delete_status']];
  let appends=0;s.ctx.fetch=async url=>{if(url.includes(':append')){appends++;throw Error('transport_failure')}return {ok:true,json:async()=>({})}};
  assert.equal((await s.c.mirrorContentSheets(s.env)).status,'failed');assert.equal(appends,1);assert.equal(s.sql.prepare("SELECT status FROM content_sheet_outbox WHERE kind='clickouts'").get().status,'uncertain');await s.c.mirrorContentSheets(s.env);assert.equal(appends,1);
  assert.equal(s.sql.prepare('SELECT status FROM content_deletion_queue').get().status,'awaiting_sheet');
@@ -114,7 +114,7 @@ test('weighted cleanup uses the default 1x views plus 10x likes, reverses for wo
 test('weighted ranking distinguishes missing from zero and permits an explicitly excluded metric',()=>{
  const {c}=setup(),a={post_id:'a',delete_status:'published',metrics:{views:0,likes:0}},b={post_id:'b',delete_status:'published',metrics:{views:1,likes:0}};
  assert.deepEqual([...c.rankDuplicateMembers([a,b],1,'worst','weighted_score').keep],['a']);
- for(const metrics of [{views:100},{likes:100},{views:100,likes:null},{views:100,likes:'10'},{views:100,likes:-1},{views:Infinity,likes:1},{views:Number.MAX_SAFE_INTEGER,likes:1}])assert.throws(()=>c.rankDuplicateMembers([a,{...b,metrics}],1,'best','weighted_score'),/missing_metrics/);
+ for(const metrics of [{views:100},{likes:100},{views:100,likes:null},{views:100,likes:'10'},{views:100,likes:-1},{views:Infinity,likes:1},{views:Number.MAX_SAFE_INTEGER,likes:1}])assert.throws(()=>c.rankDuplicateMembers([a,{...b,metrics}],1,'best','weighted_score'),/missing_ranking_metrics/);
  assert.deepEqual([...c.rankDuplicateMembers([a,{...b,metrics:{likes:8}}],1,'best','weighted_score',{views:0,likes:10}).keep],['b']);
  assert.throws(()=>c.rankDuplicateMembers([a,{...b,delete_status:'awaiting_sheet'}],1,'best','weighted_score'),/already_queued/);
 });
@@ -264,4 +264,55 @@ test('metric failures attach only to the exact platform account post and retain 
  let response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].members[0].metric_status.likes.status,'not_collected');
  await s.env.STORE.put('meta_content',{first_seen:new Date().toISOString(),last_seen:new Date().toISOString(),id:'1',asset_id:'12345',platform:'instagram',kind:'IMAGE'});await s.env.STORE.put('content_collect_state',{id:'meta:post:1',payload:JSON.stringify({error:'network_unavailable',checked_at:new Date().toISOString()})});
  response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});const p=response.rows[0].members[0];assert.equal(p.metrics.views,10);assert.equal(p.metric_status.views.refresh_status,'failed');assert.equal(p.metric_status.likes.status,'failed');
+});
+
+
+function mirrorFixture(s,initial={clickouts:[['URLS']]}){
+ const tabs=new Map(Object.entries(initial).map(([title,rows],i)=>[title,{sheetId:i+1,rows:structuredClone(rows),columnCount:26}])),calls=[];let mode='ok';
+ s.ctx.sheetToken=async()=> 'private';s.ctx.sheetJSON=async u=>{if(u.includes('/values/')){const range=decodeURIComponent(u.split('/values/')[1]);assert.match(range,/!A:Z$/);return {values:await s.ctx.readSheet(null,null,range.split("'")[1])};}return {sheets:[...tabs].map(([title,t])=>({properties:{title,sheetId:t.sheetId,gridProperties:{columnCount:t.columnCount}}}))};};
+ s.ctx.readSheet=async(_env,_token,title)=>{calls.push({read:title});if(!tabs.has(title))throw Error('google_http_400');return structuredClone(tabs.get(title).rows);};
+ const col=s=>[...s].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1;
+ s.ctx.fetch=async(url,options)=>{
+  const body=JSON.parse(options.body),entry={url,body};calls.push(entry);
+  if(url.endsWith(':batchUpdate')&&!url.includes('/values')){
+   const replies=body.requests.map(r=>{if(r.addSheet){const title=r.addSheet.properties.title,t={sheetId:tabs.size+1,rows:[],columnCount:26};tabs.set(title,t);return {addSheet:{properties:{title,sheetId:t.sheetId,gridProperties:{columnCount:26}}}};}return {};});return {ok:true,json:async()=>({replies})};
+  }
+  if(url.includes(':append')){
+   if(mode==='reject')return {ok:false,status:400,json:async()=>({})};
+   const t=tabs.get('clickouts');if(mode!=='lost-before')t.rows.push(...structuredClone(body.values));
+   if(mode.startsWith('lost'))throw Error('network_lost');return {ok:true,json:async()=>({updates:{updatedRows:body.values.length}})};
+  }
+  assert.equal(body.valueInputOption,'RAW');
+  for(const update of body.data){const m=update.range.match(/^'([^']+)'!([A-Z]+)(\d+)/);assert.ok(m,update.range);const rows=tabs.get(m[1]).rows,r=Number(m[3])-1,c=col(m[2]);while(rows.length<=r)rows.push([]);update.values[0].forEach((v,i)=>rows[r][c+i]=v);}
+  return {ok:true,json:async()=>({})};
+ };
+ return {tabs,calls,setMode:v=>mode=v};
+}
+async function confirmedMirrorFixture(){const s=setup();await group(s);const p=await s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});return s;}
+test('confirmed clickouts bypass a missing mapping tab, batch all removals and include exact text identities',async()=>{
+ const s=await confirmedMirrorFixture(),f=mirrorFixture(s);assert.ok(await s.env.STORE.find('content_collect_state',{id:'request:sheet_mirror'}));
+ const result=await s.c.mirrorContentSheets(s.env);assert.equal(result.status,'ok');assert.equal(result.processed,3);assert.deepEqual(f.calls.filter(c=>c.read).map(c=>c.read),['clickouts']);
+ const rows=f.tabs.get('clickouts').rows;assert.deepEqual(rows[0],['URLS','platform','account_id','post_id','request_id','queued_at']);assert.equal(rows.length,4);
+ for(const r of rows.slice(1)){assert.equal(r[1],'instagram');assert.equal(r[2],'12345');assert.equal(typeof r[3],'string');assert.ok(r[4]);assert.ok(r[5]);assert.match(r[0],/instagram.com/);}
+ assert.equal(s.sql.prepare("SELECT count(*) n FROM content_deletion_queue WHERE status='queued_clickouts'").get().n,3);assert.equal(f.calls.filter(c=>c.url?.includes(':append')).length,1);
+ assert.equal((await s.c.mirrorContentSheets(s.env)).status,'ok');assert.ok(f.tabs.has('meta-posts-to-id'));assert.equal(f.tabs.get('meta-posts-to-id').rows.length,5);assert.equal(f.calls.filter(c=>c.url?.includes(':append')).length,1);
+});
+test('legacy URL rows gain identity without duplicate links or overwriting workflow columns',async()=>{
+ const s=await confirmedMirrorFixture(),q=s.sql.prepare('SELECT * FROM content_deletion_queue ORDER BY post_id').all(),f=mirrorFixture(s,{clickouts:[['notes','URLS','status'],['operator note',q[0].permalink,'reviewed']]});
+ assert.equal((await s.c.mirrorContentSheets(s.env)).status,'ok');const rows=f.tabs.get('clickouts').rows;assert.equal(rows.length,4);assert.deepEqual(rows[1].slice(0,3),['operator note',q[0].permalink,'reviewed']);assert.equal(rows[1][rows[0].indexOf('post_id')],q[0].post_id);
+ const appended=f.calls.find(c=>c.url?.includes(':append')).body.values;assert.equal(appended.length,2);assert.ok(appended.every(r=>r[0]===''&&r[2]===''));
+});
+test('a definite Sheet append rejection stays retryable while a lost response is reconciled without another append',async()=>{
+ const s=await confirmedMirrorFixture(),f=mirrorFixture(s);f.setMode('reject');let r=await s.c.mirrorContentSheets(s.env);assert.match(r.error_code,/append_clickouts:google_write_http_400/);assert.equal(s.sql.prepare("SELECT count(*) n FROM content_sheet_outbox WHERE kind='clickouts' AND status='pending'").get().n,3);
+ f.setMode('lost-after');r=await s.c.mirrorContentSheets(s.env);assert.equal(r.status,'failed');assert.equal(s.sql.prepare("SELECT count(*) n FROM content_sheet_outbox WHERE kind='clickouts' AND status='uncertain'").get().n,3);
+ s.sql.prepare("UPDATE content_sheet_outbox SET status='synced' WHERE kind='post'").run();f.setMode('ok');r=await s.c.mirrorContentSheets(s.env);assert.equal(r.status,'ok');assert.equal(r.processed,3);assert.equal(f.calls.filter(c=>c.url?.includes(':append')).length,2);assert.equal(f.tabs.get('clickouts').rows.length,4);
+});
+test('uncertain absent rows are never re-appended and existing identity conflicts fail before mutation',async()=>{
+ const s=await confirmedMirrorFixture(),f=mirrorFixture(s);f.setMode('lost-before');await s.c.mirrorContentSheets(s.env);s.sql.prepare("UPDATE content_sheet_outbox SET status='synced' WHERE kind='post'").run();f.setMode('ok');const r=await s.c.mirrorContentSheets(s.env);assert.equal(r.status,'needs_review');assert.equal(f.calls.filter(c=>c.url?.includes(':append')).length,1);
+ const t=await confirmedMirrorFixture(),q=t.sql.prepare('SELECT * FROM content_deletion_queue').get(),g=mirrorFixture(t,{clickouts:[['URLS','platform','account_id','post_id','request_id','queued_at'],[q.permalink,'instagram','another-account','wrong-post',q.request_id,'']]});
+ assert.match((await t.c.mirrorContentSheets(t.env)).error_code,/clickouts_identity_conflict/);assert.equal(g.calls.filter(c=>c.url).length,0);assert.equal(g.tabs.get('clickouts').rows[1][2],'another-account');
+});
+test('large Meta post IDs survive clickouts export as strings',async()=>{
+ const s=setup(),id='9223372036854775807';await s.c.upsertPosts(s.env,[post(id),post('2')]);await s.c.ingestGroups(s.env,[{group_id:'big',platform:'instagram',account_id:'12345',media_type:'IMAGE',members:[id,'2'],algorithm:'fixture',evidence:{}}]);
+ const p=await s.c.planCleanup(s.env,{group_id:'big',keep_count:1,keep_strategy:'worst',metric:'views'});await s.c.queueCleanup(s.env,{plan_id:p.plan_id,confirmation:p.confirmation});const f=mirrorFixture(s);assert.equal((await s.c.mirrorContentSheets(s.env)).status,'ok');assert.equal(f.tabs.get('clickouts').rows[1][3],id);
 });

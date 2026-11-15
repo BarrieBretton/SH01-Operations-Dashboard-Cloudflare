@@ -71,7 +71,7 @@ function contentMetricEvidence(row,tables){
  const postState=media?JSON.parse(context.states.get('meta:post:'+row.post_id)?.payload||'{}'):{};
  const reasonState=reason=>/credential_rejected/.test(reason)?'connection_required':/permission_denied/.test(reason)?'permission_required':/metric_unsupported/.test(reason)?'unsupported':/rate_limited|budget/.test(reason)?'deferred':/no_numeric|empty_or_suppressed|not_returned/.test(reason)?'not_returned':'failed';
  const result={};
- for(const metric of ['views','likes','comments','shares']){
+ for(const metric of CONTENT_METRICS){
   const key=row.platform==='facebook'&&metric==='views'?'post_media_view':metric;
   const cap=caps.filter(c=>c.metric===key||(row.platform==='facebook'&&metric!=='views'&&c.metric==='engagement_fields')).sort((a,b)=>String(b.checked_at||'').localeCompare(String(a.checked_at||''))||Number(a.metric==='engagement_fields')-Number(b.metric==='engagement_fields'))[0];
   const failure=postState.error&&(!cap||String(postState.checked_at)>String(cap.checked_at))?{status:reasonState(postState.error),checked_at:postState.checked_at||null}:cap?.status==='unavailable'?{status:reasonState(cap.reason||''),checked_at:cap.checked_at||null}:null;
@@ -200,7 +200,8 @@ function rankDuplicateMembers(members,k,strategy,metric,requestedWeights) {
  const weighted=metric==='weighted_score';if(!weighted&&!CONTENT_METRICS.has(metric))throw Error('unsupported_ranking_metric');
  const weights=weighted?cleanupScoreWeights(requestedWeights):null;
  const values=members.map(p=>({post_id:p.post_id,value:weighted?cleanupScore(p.metrics,weights):p.metrics?.[metric],inputs:weighted?{views:p.metrics?.views??null,likes:p.metrics?.likes??null}:{[metric]:p.metrics?.[metric]??null}}));
- if(values.some(p=>typeof p.value!=='number'||!Number.isFinite(p.value)||p.value<0)||members.some(p=>p.delete_status!=='published'))throw Error('missing_metrics_or_already_queued_member');
+ if(members.some(p=>p.delete_status!=='published'))throw Error('already_queued_member');
+ if(values.some(p=>typeof p.value!=='number'||!Number.isFinite(p.value)||p.value<0))throw Error('missing_ranking_metrics');
  const byId=new Map(values.map(p=>[p.post_id,p.value]));
  const ranked=[...members].sort((a,b)=>(strategy==='best'?byId.get(b.post_id)-byId.get(a.post_id):byId.get(a.post_id)-byId.get(b.post_id))||a.post_id.localeCompare(b.post_id));
  const ranking={version:weighted?'weighted_v1':'single_metric_v1',weights,formula:weighted?'Views × '+weights.views+' + Likes × '+weights.likes:metric,values};
@@ -216,11 +217,11 @@ async function planCleanup(env,b) {
 }
 async function queueCleanup(env,b){
  if(env.GOOGLE_SHEETS_WRITE_ENABLED!=='1')throw Error('sheet_writes_disabled');
- return env.STORE.transact(['content_cleanup_plans','content_duplicate_groups','content_posts','content_deletion_queue','content_sheet_outbox'],async tx=>{
+ return env.STORE.transact(['content_cleanup_plans','content_duplicate_groups','content_posts','content_deletion_queue','content_sheet_outbox','content_collect_state'],async tx=>{
   const p=tx.find('content_cleanup_plans',{plan_id:contentID(b.plan_id)});if(!p||p.committed||Date.parse(p.expires_at)<Date.now())throw Error('plan_missing_used_or_expired');const data=JSON.parse(p.payload);if(b.confirmation!==data.confirmation)throw Error('confirmation_mismatch');
   const group=groupFromTables(tx.rows('content_duplicate_groups'),tx.rows('content_posts'),p.group_id);if(await producerHash(JSON.stringify(group))!==p.source_digest)throw Error('group_or_metrics_changed_preview_again');
   const at=contentNow();for(const x of data.remove){const w={platform:data.platform,account_id:data.account_id,post_id:x.post_id};if(tx.find('content_deletion_queue',w))throw Error('post_already_queued');const request_id=crypto.randomUUID(),rec={request_id,...w,permalink:x.permalink};tx.put('content_deletion_queue',{...rec,status:'awaiting_sheet',reason:'confirmed_duplicate_plan',created_at:at,updated_at:at});tx.put('content_sheet_outbox',{record_key:'delete:'+request_id,kind:'clickouts',payload:JSON.stringify(rec),status:'pending',error_code:null,updated_at:at});Object.assign(tx.find('content_posts',w),{delete_status:'awaiting_sheet'});}
-  p.payload=JSON.stringify({...data,confirmed_at:at});p.committed=1;return {confirmed_at:at,queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
+  p.payload=JSON.stringify({...data,confirmed_at:at});p.committed=1;tx.put('content_collect_state',{id:'request:sheet_mirror',payload:JSON.stringify({requested_at:at,nonce:crypto.randomUUID()})});return {confirmed_at:at,queued:data.remove.length,keep:data.keep,keep_strategy:data.keep_strategy,status:'awaiting_sheet',execution:'not_yet_deleted'};
  });
 }
 async function contentStatus(env,tables=null){
@@ -242,42 +243,80 @@ async function setupContentSheet(env){
  return {ok:true,tab:POST_SHEET};
 }
 function sheetCol(n){let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;}
+const CLICKOUT_HEADERS=['URLS','platform','account_id','post_id','request_id','queued_at'];
+async function prepareMirrorTab(env,token,title){
+ const root='https://sheets.googleapis.com/v4/spreadsheets/'+encodeURIComponent(env.GOOGLE_SHEETS_SPREADSHEET_ID);
+ let info;try{info=await sheetJSON(root+'?fields=sheets.properties',{headers:{Authorization:'Bearer '+token}});}catch(e){throw Error('sheet_metadata_'+e.message);}
+ let props=(info.sheets||[]).map(x=>x.properties).find(p=>p.title===title);
+ if(!props){const added=await contentSheetWrite(env,token,':batchUpdate',{requests:[{addSheet:{properties:{title}}}]});props=added.replies?.[0]?.addSheet?.properties;if(!props||props.title!==title)throw Error('sheet_creation_unverified');}
+ let rows;try{const width=Math.min(52,props.gridProperties?.columnCount||26),range="'"+title+"'!A:"+sheetCol(width-1),data=await sheetJSON(root+'/values/'+encodeURIComponent(range),{headers:{Authorization:'Bearer '+token}});rows=data.values||[];if(data.majorDimension&&data.majorDimension!=='ROWS'||!Array.isArray(rows)||rows.length>20000||rows.some(r=>!Array.isArray(r)))throw Error('sheet_invalid_shape');}catch(e){throw Error((title==='clickouts'?'clickouts':'post_sheet')+'_read_'+e.message);}
+ const headers=title==='clickouts'?CLICKOUT_HEADERS:POST_HEADERS;
+ if(title!== 'clickouts'&&rows.length&&rows[0].join('|')!==POST_HEADERS.join('|'))throw Error('post_sheet_header_mismatch');
+ let current=rows[0]||[],normal=current.map(h=>String(h).trim().toLowerCase()),occupied=normal.filter(Boolean);
+ if(new Set(occupied).size!==occupied.length)throw Error('sheet_duplicate_columns');
+ if(title==='clickouts'&&rows.length&&!normal.includes('urls'))throw Error('clickouts_URLS_column_missing');
+ const next=[...current];for(const name of headers)if(!normal.includes(name.toLowerCase()))next.push(name);
+ if(next.length>52)throw Error('sheet_header_limit');
+ if(props.gridProperties?.columnCount<next.length)await contentSheetWrite(env,token,':batchUpdate',{requests:[{appendDimension:{sheetId:props.sheetId,dimension:'COLUMNS',length:next.length-props.gridProperties.columnCount}}]});
+ if(next.join('|')!==current.join('|'))await contentSheetWrite(env,token,'/values:batchUpdate',{valueInputOption:'RAW',data:[{range:"'"+title+"'!A1:"+sheetCol(next.length-1)+'1',values:[next]}]});
+ if(!rows.length)rows=[next];else rows[0]=next;
+ return rows;
+}
+function clickoutValues(data,headers,created){
+ const values={urls:data.permalink,platform:data.platform,account_id:String(data.account_id),post_id:String(data.post_id),request_id:data.request_id,queued_at:created};
+ return headers.map(h=>values[String(h).trim().toLowerCase()]??'');
+}
 async function mirrorContentSheets(env){
  if(env.GOOGLE_SHEETS_WRITE_ENABLED!=='1'||!await contentReady(env))return {status:'disabled'};
- const db=env.STORE,lease=crypto.randomUUID(),at=contentNow();
- const claim=await db.claim('content_jobs','sheet_mirror',lease,300000);
- if(!claim)return {status:'already_running'};
+ const db=env.STORE,lease=crypto.randomUUID();if(!await db.claim('content_jobs','sheet_mirror',lease,300000))return {status:'already_running'};
+ let stage='outbox';
  try{
-  const pending=storeSort((await db.rows('content_sheet_outbox')).filter(r=>r.status==='pending'),'updated_at').slice(0,1); // Bound Google reads and Worker subrequests per cron invocation.
-  if(pending.length){const token=await sheetToken(env),postRows=await readSheet(env,token,POST_SHEET);
-   if(!postRows.length||postRows[0].join('|')!==POST_HEADERS.join('|'))throw Error('setup_post_sheet_first');
-   const clickRows=pending.some(r=>r.kind==='clickouts')?await readSheet(env,token,'clickouts'):null;
-   const clickCol=clickRows?clickRows[0]?.findIndex(h=>String(h).trim().toUpperCase()==='URLS'):-1;
-   if(clickRows&&clickCol<0)throw Error('clickouts_URLS_column_missing');
-   const updates=[],done=[],clickAppends=[];let nextPost=postRows.length+1;
-   for(const row of pending){const data=JSON.parse(row.payload);
-    if(row.kind==='post'){
-     const p=await db.find('content_posts',{platform:data.platform,account_id:data.account_id,post_id:data.post_id});if(!p)throw Error('outbox_post_missing');
-     const index=postRows.findIndex((r,i)=>i>0&&r[0]===row.record_key),rowNumber=index>=0?index+1:nextPost++;
-     const record={...p,record_key:row.record_key};updates.push({range:"'"+POST_SHEET+"'!A"+rowNumber+':M'+rowNumber,values:[POST_HEADERS.map(k=>record[k]??'')]});
-    }else{
-     const already=clickRows.slice(1).some(r=>{try{return canonicalPostURL(r[clickCol],data.platform)===data.permalink}catch{return false}});
-     if(!already){const values=Array(clickCol+1).fill('');values[clickCol]=data.permalink;clickAppends.push({row,values});}
-    }done.push(row);
-   }
-   // Fixed-cell writes can be retried after a lost response; a fresh read reconciles prior writes.
-   if(updates.length)await contentSheetWrite(env,token,'/values:batchUpdate',{valueInputOption:'RAW',data:updates});
-   if(clickAppends.length){
-    await db.transact(['content_sheet_outbox'],tx=>{for(const x of clickAppends){const r=tx.find('content_sheet_outbox',{record_key:x.row.record_key});if(r.updated_at!==x.row.updated_at)throw Error('outbox_changed_retry');Object.assign(r,{status:'uncertain',error_code:'append_outcome_pending'});}});
-    // No automatic retry after an ambiguous append. It might have triggered deletion already.
-    await contentSheetWrite(env,token,'/values/'+encodeURIComponent("'clickouts'!A:"+sheetCol(clickCol))+':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',{values:clickAppends.map(x=>x.values)});
-   }
-   await db.transact(['content_sheet_outbox','content_deletion_queue','content_posts'],tx=>{for(const row of done){const r=tx.find('content_sheet_outbox',{record_key:row.record_key});if(r.updated_at!==row.updated_at)continue;Object.assign(r,{status:'synced',error_code:null});if(row.kind==='clickouts'){const d=JSON.parse(row.payload),q=tx.find('content_deletion_queue',{request_id:d.request_id}),p=tx.find('content_posts',{platform:d.platform,account_id:d.account_id,post_id:d.post_id});if(q?.status==='awaiting_sheet')Object.assign(q,{status:'queued_clickouts',updated_at:contentNow()});if(p?.delete_status==='awaiting_sheet')p.delete_status='queued_clickouts';}}});
-
+  const {tables}=await db.snapshot(['content_sheet_outbox','content_posts','content_deletion_queue']);
+  const all=storeSort(tables.content_sheet_outbox,'updated_at'),clicks=all.filter(r=>r.kind==='clickouts'&&['pending','uncertain'].includes(r.status));
+  // Confirmed clickouts cannot wait behind the complete publication registry.
+  const fresh=clicks.filter(r=>r.status==='pending'),postsPending=all.filter(r=>r.kind==='post'&&r.status==='pending');
+  const pending=(fresh.length?[...fresh,...clicks.filter(r=>r.status==='uncertain')]:postsPending.length?postsPending:clicks).slice(0,10);
+  if(!pending.length){await db.finish('content_jobs','sheet_mirror',lease,{status:'ok',last_success:contentNow(),error_code:null});return {status:'ok',processed:0};}
+  stage='authorization';const token=await sheetToken(env),clickout=pending[0].kind==='clickouts',title=clickout?'clickouts':POST_SHEET;
+  stage='prepare_'+title;const rows=await prepareMirrorTab(env,token,title),headers=rows[0],normal=headers.map(h=>String(h).trim().toLowerCase());
+  const updates=[],done=[],appends=[],unresolved=[];let nextPost=rows.length+1;
+  for(const row of pending){
+   const data=JSON.parse(row.payload),post=tables.content_posts.find(p=>p.platform===data.platform&&p.account_id===data.account_id&&p.post_id===data.post_id);
+   if(!post)throw Error('outbox_post_missing');
+   if(!clickout){const index=rows.findIndex((r,i)=>i>0&&r[0]===row.record_key),n=index>=0?index+1:nextPost++,record={...post,record_key:row.record_key};updates.push({range:"'"+title+"'!A"+n+':M'+n,values:[POST_HEADERS.map(k=>record[k]??'')]});done.push(row);continue;}
+   const queue=tables.content_deletion_queue.find(q=>q.request_id===data.request_id);
+   if(!queue||queue.platform!==data.platform||queue.account_id!==data.account_id||queue.post_id!==data.post_id||queue.permalink!==data.permalink||post.permalink!==data.permalink)throw Error('outbox_identity_mismatch');
+   if(queue.status!=='awaiting_sheet'){unresolved.push(row);continue;}
+   const col=normal.indexOf('urls'),reqCol=normal.indexOf('request_id');
+   const matches=rows.map((r,i)=>({r,i})).filter(({r,i})=>i>0&&(r[reqCol]===data.request_id||(()=>{try{return canonicalPostURL(r[col],data.platform)===data.permalink}catch{return false}})()));
+   if(matches.length>1)throw Error('clickouts_duplicate_identity');
+   const expected=clickoutValues(data,headers,queue.created_at);
+   if(matches.length){
+    const {r,i}=matches[0];
+    for(const name of ['urls','platform','account_id','post_id','request_id']){const col=normal.indexOf(name),v=String(r[col]??'');if(v&&v!==expected[col]&&!(name==='urls'&&canonicalPostURL(v,data.platform)===data.permalink))throw Error('clickouts_identity_conflict');}
+    // Enrich an existing URL row only in our own blank columns; retain workflow state.
+    for(let col=0;col<headers.length;col++)if(expected[col]&&!(r[col]??''))updates.push({range:"'clickouts'!"+sheetCol(col)+(i+1),values:[[expected[col]]]});
+    done.push(row);
+   }else if(row.status==='uncertain'){unresolved.push(row);}else appends.push({row,values:expected});
   }
-  await db.finish('content_jobs','sheet_mirror',lease,{status:'ok',last_success:contentNow(),error_code:null});return {status:'ok',processed:pending.length};
- }catch(e){const code=/^(google_|sheet_|post_sheet|setup_post|clickouts_|outbox_)/.test(e.message)?e.message.slice(0,80):'sheet_mirror_failed';await db.finish('content_jobs','sheet_mirror',lease,{status:'failed',error_code:code});return {status:'failed',error_code:code};}
+  stage='update_'+title;if(updates.length)await contentSheetWrite(env,token,'/values:batchUpdate',{valueInputOption:'RAW',data:updates});
+  if(appends.length){
+   await db.transact(['content_sheet_outbox'],tx=>{for(const x of appends){const r=tx.find('content_sheet_outbox',{record_key:x.row.record_key});if(r?.updated_at!==x.row.updated_at||r.status!=='pending')throw Error('outbox_changed_retry');Object.assign(r,{status:'uncertain',error_code:'append_outcome_pending'});}});
+   stage='append_clickouts';
+   try{await contentSheetWrite(env,token,'/values/'+encodeURIComponent("'clickouts'!A:"+sheetCol(headers.length-1))+':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',{values:appends.map(x=>x.values)});}
+   catch(e){
+    // A definite rejection wrote nothing. Network/5xx outcomes stay quarantined.
+    if(/^google_write_http_(400|401|403|404|409|422|429)$/.test(e.message))await db.transact(['content_sheet_outbox'],tx=>{for(const x of appends){const r=tx.find('content_sheet_outbox',{record_key:x.row.record_key});if(r?.updated_at===x.row.updated_at)Object.assign(r,{status:'pending',error_code:e.message});}});
+    throw e;
+   }done.push(...appends.map(x=>x.row));
+  }
+  stage='record_delivery';
+  await db.transact(['content_sheet_outbox','content_deletion_queue','content_posts'],tx=>{for(const row of done){const r=tx.find('content_sheet_outbox',{record_key:row.record_key});if(r?.updated_at!==row.updated_at)continue;Object.assign(r,{status:'synced',error_code:null});if(row.kind==='clickouts'){const d=JSON.parse(row.payload),q=tx.find('content_deletion_queue',{request_id:d.request_id}),p=tx.find('content_posts',{platform:d.platform,account_id:d.account_id,post_id:d.post_id});if(q?.status==='awaiting_sheet')Object.assign(q,{status:'queued_clickouts',updated_at:contentNow()});if(p?.delete_status==='awaiting_sheet')p.delete_status='queued_clickouts';}}});
+  const status=unresolved.length?'needs_review':'ok',error_code=unresolved.length?'clickouts_append_outcome_uncertain':null;
+  await db.finish('content_jobs','sheet_mirror',lease,{status,last_success:contentNow(),error_code});return {status,processed:done.length,uncertain:unresolved.length};
+ }catch(e){const reason=/^(google_|sheet_|post_sheet|clickouts_|outbox_)/.test(e.message)?e.message:'sheet_mirror_failed',code=(stage+':'+reason).slice(0,160);await db.finish('content_jobs','sheet_mirror',lease,{status:'failed',error_code:code});return {status:'failed',error_code:code};}
 }
+
 async function contentApi(req,env,ctx) {
  const u=new URL(req.url),p=u.pathname;
  if(['/api/content/media','/api/content/poster','/api/content/comments'].includes(p)&&req.method==='POST')return contentExtrasApi(req,env);
@@ -290,15 +329,15 @@ async function contentApi(req,env,ctx) {
   return json({fingerprints:rows.slice(0,100).map(r=>({...r,fingerprint:JSON.parse(r.fingerprint)})),has_more:rows.length>100});
  }
  if(p==='/api/content/sheets/setup'&&req.method==='POST')return json(await setupContentSheet(env));
- if(p==='/api/content/sheets/sync'&&req.method==='POST'){return json(await queueStoredJob(env,'sheet_mirror'),202);}
+ if(p==='/api/content/sheets/sync'&&req.method==='POST'){if(env.GOOGLE_SHEETS_WRITE_ENABLED!=='1')throw Error('sheet_writes_disabled');return json(await queueStoredJob(env,'sheet_mirror'),202);}
  if(p==='/api/content/plan'&&req.method==='POST')return json(await planCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='POST')return json(await queueCleanup(env,await body(req)));
  if(p==='/api/content/queue'&&req.method==='GET'){
   const {tables}=await env.STORE.snapshot(['content_deletion_queue','content_posts','meta_assets','meta_content','content_jobs','content_sheet_outbox','sheet_sync_state','sheet_live_producers','meta_capabilities','content_collect_state']);
-  const posts=new Map(tables.content_posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p]));
+  const posts=new Map(tables.content_posts.map(p=>[JSON.stringify([p.platform,p.account_id,p.post_id]),p])),outbox=new Map(tables.content_sheet_outbox.filter(r=>r.kind==='clickouts').map(r=>[JSON.parse(r.payload).request_id,r]));
   const rows=storeSort(tables.content_deletion_queue,'-created_at').slice(0,501).map(q=>{
    const p=posts.get(JSON.stringify([q.platform,q.account_id,q.post_id])),verified=!!p&&p.permalink===q.permalink;
-   return {...(verified?{...publicPost(p),...contentAccountName(p,tables.meta_assets),poster_url:contentPoster(p,tables.meta_content),metric_status:contentMetricEvidence(p,tables)}:{}),...q,preview_available:verified&&p.delete_status!=='deleted',preview_unavailable_reason:!verified?'Post identity has not been verified. Open the original link.':p.delete_status==='deleted'?'Post is recorded as deleted.':''};
+   return {...(verified?{...publicPost(p),...contentAccountName(p,tables.meta_assets),poster_url:contentPoster(p,tables.meta_content),metric_status:contentMetricEvidence(p,tables)}:{}),...q,sheet_delivery:{status:outbox.get(q.request_id)?.status||'not_recorded',error_code:outbox.get(q.request_id)?.error_code||(q.status==='awaiting_sheet'?tables.content_jobs.find(j=>j.id==='sheet_mirror'&&j.status==='failed')?.error_code:null)||null},preview_available:verified&&p.delete_status!=='deleted',preview_unavailable_reason:!verified?'Post identity has not been verified. Open the original link.':p.delete_status==='deleted'?'Post is recorded as deleted.':''};
   });
   const state=tables.sheet_sync_state.find(s=>s.id===1)||{},metaRow=tables.sheet_live_producers.find(s=>s.version===state.active_version&&s.producer_id==='__producer_source_evidence_v2__'),sheet=metaRow?JSON.parse(metaRow.payload)?.clickouts:null;
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
