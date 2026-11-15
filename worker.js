@@ -6,6 +6,18 @@ const STORE_SCHEMA = {"failures":{"keys":["source","event_id"],"columns":["sourc
 const STORE_MARKER='sh01-sheets-v2', STORE_GUARD_NAME='_sh01_ops_revision_guard';
 const STORE_PARTS=16, STORE_CHUNK=38000;
 const storeTokens=new WeakMap();
+const storeQuotaKeys=new WeakMap(),storeQuotaStates=new Map(),storeReadFlights=new WeakMap(),storeRawSnapshots=new WeakMap();
+async function storeQuotaState(env){
+ // Google quotas apply to the OAuth user/project, including different workbooks.
+ let key=storeQuotaKeys.get(env);
+ if(!key){key=crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([
+  env.GOOGLE_CLIENT_ID,env.GOOGLE_CLIENT_SECRET,env.GOOGLE_REFRESH_TOKEN
+ ]))).then(b=>Array.from(new Uint8Array(b),n=>n.toString(16).padStart(2,'0')).join(''));storeQuotaKeys.set(env,key);}
+ key=await key;let state=storeQuotaStates.get(key);
+ if(!state){if(storeQuotaStates.size>=32)storeQuotaStates.delete(storeQuotaStates.keys().next().value);state={until:0};storeQuotaStates.set(key,state);}
+ return state;
+}
+function storeQuotaError(state){return Object.assign(Error('store_rate_limited'),{retryAfter:Math.max(1,Math.ceil((state.until-Date.now())/1000))});}
 function storeKey(table,row){const s=Object.hasOwn(STORE_SCHEMA,table)?STORE_SCHEMA[table]:null;if(!s||!row||Array.isArray(row)||typeof row!=='object')throw Error('store_invalid_record');if(Object.keys(row).some(k=>!s.columns.includes(k)))throw Error('store_unknown_column');return JSON.stringify(s.keys.map(k=>{if(row[k]===undefined||row[k]===null)throw Error('store_missing_key');return row[k]}));}
 function storeSort(rows,...fields){return rows.sort((a,b)=>{for(const f of fields){const desc=f[0]==='-',k=desc?f.slice(1):f,c=String(a[k]??'').localeCompare(String(b[k]??''));if(c)return desc?-c:c;}return 0;});}
 function storeMatch(row,where){return Object.entries(where).every(([k,v])=>row[k]===v);}
@@ -32,10 +44,13 @@ function storeRetryDelay(attempt,header){
  return Math.max(floor,500*2**attempt)+Math.floor(Math.random()*500*2**attempt);
 }
 async function storeGoogle(env,suffix,payload,authRetried=false){
+ const quota=await storeQuotaState(env);if(quota.until>Date.now())throw storeQuotaError(quota);
  const token=await storeToken(env),u='https://sheets.googleapis.com/v4/spreadsheets/'+encodeURIComponent(env.GOOGLE_SHEETS_SPREADSHEET_ID)+suffix;
  // Mutations are NOT blindly retried here. Their guard/idempotency state is reconciled first.
  const tries=payload===undefined?3:1;
  for(let i=0;i<tries;i++){
+  if(quota.until>Date.now())throw storeQuotaError(quota);
+  if(payload!==undefined)storeReadFlights.delete(env);
   let r;try{r=await fetch(u,{method:payload===undefined?'GET':'POST',redirect:'manual',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)}),signal:AbortSignal.timeout(20000)});}catch(e){
    const kind=/too many subrequests/i.test(String(e?.message||''))?'subrequest_limit':
     ['TimeoutError','AbortError'].includes(e?.name)?'request_timeout':'fetch_exception';
@@ -50,7 +65,17 @@ async function storeGoogle(env,suffix,payload,authRetried=false){
    if(cached&&(await cached.promise)===token)storeTokens.delete(env);
    return storeGoogle(env,suffix,payload,true);
   }
-  if(!r.ok){let scopeMissing=false;if(r.status===403){try{const b=await r.json();scopeMissing=b?.error?.details?.some(d=>d.reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT')||b?.error?.errors?.some(d=>d.reason==='insufficientPermissions');}catch{}}const code=scopeMissing?'store_google_scope_missing':r.status===401?'store_google_oauth_rejected':r.status===403?'store_google_permission_denied':r.status===404?'store_workbook_not_found':r.status===429?'store_rate_limited':r.status===400?'store_google_invalid_request':'store_google_unavailable';if(i+1<tries&&(r.status===429||r.status>=500)){const delay=storeRetryDelay(i,r.headers?.get('Retry-After'));if(delay<=20000){await r.body?.cancel();await new Promise(ok=>setTimeout(ok,delay));continue;}}throw Error(code);}
+  if(!r.ok){
+   let scopeMissing=false,limited=r.status===429;
+   if(r.status===403){try{const b=await r.json();scopeMissing=b?.error?.details?.some(d=>d.reason==='ACCESS_TOKEN_SCOPE_INSUFFICIENT')||b?.error?.errors?.some(d=>d.reason==='insufficientPermissions');limited=b?.error?.errors?.some(d=>['rateLimitExceeded','userRateLimitExceeded'].includes(d.reason));}catch{}}
+   if(limited){
+    quota.until=Math.max(quota.until,Date.now()+Math.max(75000,storeRetryDelay(0,r.headers?.get('Retry-After')))+Math.floor(Math.random()*5000));
+    storeReadFlights.delete(env);if(!r.bodyUsed)await r.body?.cancel();throw storeQuotaError(quota);
+   }
+   const code=scopeMissing?'store_google_scope_missing':r.status===401?'store_google_oauth_rejected':r.status===403?'store_google_permission_denied':r.status===404?'store_workbook_not_found':r.status===400?'store_google_invalid_request':'store_google_unavailable';
+   if(i+1<tries&&r.status>=500){const delay=storeRetryDelay(i,r.headers?.get('Retry-After'));if(delay<=20000){await r.body?.cancel();await new Promise(ok=>setTimeout(ok,delay));continue;}}
+   throw Error(code);
+  }
   try{return await r.json()}catch{throw Error('store_response_not_json')}
  }
 }
@@ -59,6 +84,15 @@ function storeControl(values){const v=values?.[0];if(v?.[0]!==STORE_MARKER)throw
 async function storeReadControl(env){return storeControl((await storeGoogle(env,'/values/'+encodeURIComponent("'_ops_control'!A1:B1")+'?valueRenderOption=UNFORMATTED_VALUE')).values);}
 function storeLoad(table,data){if(!STORE_SCHEMA[table])throw Error('store_unknown_table');if(JSON.stringify(data[0])!==JSON.stringify(storeHeaders()))throw Error('store_header_mismatch');const rows=new Map(),free=[];for(let i=1;i<data.length;i++){if(!data[i]?.[0]){free.push(i);continue;}let row;try{row=JSON.parse(data[i].slice(1).join(''))}catch{throw Error('store_record_corrupt')}const key=storeKey(table,row);if(key!==data[i][0]||rows.has(key))throw Error('store_duplicate_or_corrupt_key');rows.set(key,{index:i,row});}return {rows,free,next:data.length||1};}
 async function storeReadBundle(env,tables){
+ if(!Array.isArray(tables)||tables.some(t=>!Object.hasOwn(STORE_SCHEMA,t))||new Set(tables).size!==tables.length)throw Error('store_invalid_tables');
+ // Share only work that is currently in flight. No completed snapshot TTL.
+ const key=JSON.stringify([...tables].sort());let flights=storeReadFlights.get(env);
+ if(!flights){flights=new Map();storeReadFlights.set(env,flights);}
+ let pending=flights.get(key);
+ if(!pending){pending=storeReadBundleFresh(env,tables);if(flights.size<16)flights.set(key,pending);}
+ try{return structuredClone(await pending);}finally{if(flights.get(key)===pending)flights.delete(key);}
+}
+async function storeReadBundleFresh(env,tables){
  if(!Array.isArray(tables)||tables.some(t=>!Object.hasOwn(STORE_SCHEMA,t))||new Set(tables).size!==tables.length)throw Error('store_invalid_tables');
  for(let attempt=0;attempt<3;attempt++){
   const before=await storeReadControl(env),q=new URLSearchParams({valueRenderOption:'UNFORMATTED_VALUE'});for(const t of tables)q.append('ranges',"'_ops_"+t+"'!A:Q");
@@ -73,9 +107,14 @@ function storeGuardRequests(meta,oldGuard,newGuard){const sheetId=meta.sheets._o
  {deleteNamedRange:{namedRangeId:oldGuard}},
  {addNamedRange:{namedRange:{namedRangeId:newGuard,name:STORE_GUARD_NAME,range}}}
  ];}
-async function storePrepareCommit(env,payload,id,probe=false){
+async function storePrepareCommit(env,payload,id,probe=false,transactionSnapshot=null){
  if(!Array.isArray(payload.changes)||(!probe&&!payload.changes.length)||payload.changes.length>12000)throw Error('store_invalid_changes');
- const tables=[...new Set(payload.changes.map(c=>c.table))],snap=await storeReadBundle(env,tables),control=snap.control;
+ const tables=[...new Set(payload.changes.map(c=>c.table))];
+ // An internal transaction already owns a revision-checked raw snapshot. Reuse
+ // its row positions; the live metadata check and atomic guard still reject a
+ // competing commit. External/import calls must obtain their own fresh snapshot.
+ if(transactionSnapshot&&tables.some(t=>!Object.hasOwn(transactionSnapshot.tables,t)))throw Error('store_transaction_table_missing');
+ const snap=transactionSnapshot?{control:transactionSnapshot.control,tables:structuredClone(Object.fromEntries(tables.map(t=>[t,transactionSnapshot.tables[t]])))}:await storeReadBundleFresh(env,tables),control=snap.control;
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(payload)))),v=>v.toString(16).padStart(2,'0')).join('');
  const prior=control.recent.find(x=>x.id===id);if(prior){if(prior.digest!==digest)throw Error('store_replay_mismatch');return {replayed:{ok:true,revision:prior.revision,replayed:true}};}
  if(payload.revision!==control.revision)throw Error('store_revision_conflict');
@@ -100,7 +139,11 @@ async function storeExecuteCommit(env,prepared){
  if(prepared.replayed)return prepared.replayed;
  for(let attempt=0;attempt<3;attempt++){
   try{await storeGoogle(env,':batchUpdate',{requests:prepared.requests});return {ok:true,revision:prepared.next.revision,changes:prepared.changes};}
-  catch(e){const current=await storeReadControl(env),prior=current.recent.find(x=>x.id===prepared.id);
+  catch(e){
+   // An explicit quota rejection must not trigger reconciliation reads or
+   // immediate write retries. Ambiguous transport failures still reconcile.
+   if(e.message==='store_rate_limited')throw e;
+   const current=await storeReadControl(env),prior=current.recent.find(x=>x.id===prepared.id);
    if(prior){if(prior.digest!==prepared.digest)throw Error('store_replay_mismatch');return {ok:true,revision:prior.revision,replayed:true};}
    if(current.guard!==prepared.control.guard||current.revision!==prepared.control.revision)throw Error('store_revision_conflict');
    if(!['store_rate_limited','store_network_unavailable','store_google_unavailable','store_response_not_json'].includes(e.message)||attempt===2)throw e;
@@ -108,10 +151,10 @@ async function storeExecuteCommit(env,prepared){
   }
  }
 }
-async function storeRPC(env,payload){
+async function storeRPC(env,payload,transactionSnapshot=null){
  if(payload.op==='health'){const c=await storeReadControl(env);return {ok:true,backend:'google_sheets',transport:'direct_google_api',schema_version:2,revision:c.revision,guard_verified:c.guard_verified===true,tables:Object.keys(STORE_SCHEMA).length};}
  if(payload.op==='read'){const snap=await storeReadBundle(env,payload.tables),tables={};for(const t of payload.tables){const all=[...snap.tables[t].rows.values()].map(x=>x.row),offset=payload.offsets?.[t]||0;if(!Number.isSafeInteger(offset)||offset<0)throw Error('store_invalid_offset');const rows=[];let size=0,i=offset;while(i<all.length&&rows.length<1000){const n=new TextEncoder().encode(JSON.stringify(all[i])).length;if(rows.length&&size+n>700000)break;rows.push(all[i++]);size+=n;}tables[t]={rows,next:i<all.length?i:null,total:all.length};}return {ok:true,revision:snap.control.revision,tables};}
- if(payload.op==='commit')return storeExecuteCommit(env,await storePrepareCommit(env,payload,/^[a-f0-9-]{36}$/.test(payload.request_id||'')?payload.request_id:crypto.randomUUID()));
+ if(payload.op==='commit')return storeExecuteCommit(env,await storePrepareCommit(env,payload,/^[a-f0-9-]{36}$/.test(payload.request_id||'')?payload.request_id:crypto.randomUUID(),false,transactionSnapshot));
  throw Error('store_operation_rejected');
 }
 async function storeSetup(env){
@@ -154,12 +197,14 @@ class SheetStore{
  async snapshot(tables){
   tables=[...new Set(tables)];
   const snap=await storeReadBundle(this.env,tables);
-  return {revision:snap.control.revision,tables:Object.fromEntries(tables.map(t=>
+  const result={revision:snap.control.revision,tables:Object.fromEntries(tables.map(t=>
    [t,[...snap.tables[t].rows.values()].map(entry=>entry.row)]))};
+  storeRawSnapshots.set(result,snap);return result;
  }
  async rows(table){return (await this.snapshot([table])).tables[table];}
  async find(table,where){return (await this.rows(table)).find(r=>storeMatch(r,where))||null;}
  async transact(tables,fn){
+  tables=[...new Set(tables)];
   for(let attempt=0;attempt<4;attempt++){
    const snap=await this.snapshot(tables),state=Object.fromEntries(tables.map(t=>[t,new Map(structuredClone(snap.tables[t]).map(r=>[storeKey(t,r),r]))])),tx={
     rows:t=>{if(!state[t])throw Error('store_transaction_table_missing');return [...state[t].values()]},
@@ -173,7 +218,7 @@ class SheetStore{
     for(const key of before.keys())if(!after.has(key))ops.push({table:t,key,remove:true});
    }
    if(!ops.length)return result;
-   try{await storeRPC(this.env,{op:'commit',revision:snap.revision,changes:ops});return result;}catch(e){if(e.message!=='store_revision_conflict'||attempt===3)throw e;}
+   try{await storeRPC(this.env,{op:'commit',revision:snap.revision,changes:ops},storeRawSnapshots.get(snap));return result;}catch(e){if(e.message!=='store_revision_conflict'||attempt===3)throw e;}
   }
  }
  async put(table,row){return this.transact([table],tx=>tx.put(table,row));}
@@ -1162,7 +1207,7 @@ export default {
   if(req.method==='GET'&&p==='/api/producers')return await liveProducerList(env);
   const m=p.match(/^\/api\/producers\/([^/]+)\/items$/);if(req.method==='GET'&&m)return await liveProducerItems(env,decodeURIComponent(m[1]),req);
   return error('Not found',404);
- }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed';return json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);}
+ }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed',response=json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);if(safe==='store_rate_limited')response.headers.set('Retry-After',String(Math.max(1,Math.ceil(Number(e.retryAfter)||75))));return response;}
  }
 };
 

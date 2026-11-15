@@ -445,3 +445,49 @@ identical video fingerprints form one group across 8/8/3 batches. Actual all-19
 provider collection, live quota headroom and real-media matching remain unverified.
 
 Catch-up validation: 211 dashboard JavaScript tests, 61 backend scanner/auth/retry/video tests and four dashboard Python completion tests passed locally. Live all-19 matching is still an operator check.
+
+## Storage quota reduction — 15 November 2026
+
+Operator-observed: Aand Cut advanced to 12 of 50 stored supported posts with
+fingerprints and a six-video candidate group, while group refresh reported
+store_rate_limited and one account batch awaiting retry. This is evidence of
+storage throttling, not proof of a Render memory restart or slow video matching.
+
+Measured locally against the previous adapter: a normal changed transaction
+used seven Google Sheets reads and one atomic write. It now uses four reads
+and one write, a 43% reduction in reads for that path. The raw snapshot is retained
+privately for that transaction's commit preparation, instead of reading the same
+tables twice. Before/after revision checks, a fresh metadata guard check, atomic
+named-range guard rotation, request digests, response-loss reconciliation and
+conflict retries remain. Imported commits still read their own fresh snapshot.
+There is no storage schema change or new environment variable.
+
+Identical simultaneous reads within the same environment share an in-flight
+snapshot and receive independent copies. No completed snapshot cache or TTL is
+introduced. Different table sets/environments do not share data, failed reads
+are evicted, and writes invalidate in-flight sharing for subsequent requests.
+
+An explicit Google 429 (or documented 403 per-user rate-limit reason) now ends
+the request immediately with a safe store_rate_limited error. A 75-second minimum
+cooldown with jitter and any longer Retry-After is shared inside the Worker
+isolate across the same OAuth credential/project, including different workbooks.
+Only a credential digest keys this bounded map. Further requests in that scope
+fail locally until the cooldown expires. An explicitly quota-rejected write does
+not launch immediate reconciliation reads or retries; ambiguous network outcomes
+still reconcile. Other transient read failures retain bounded jittered retries.
+The main API error handler propagates Retry-After so the existing gallery and
+scanner can respect the actual delay. Authentication still precedes storage.
+
+This coordination is best-effort within one Worker isolate, not a global quota
+manager across Cloudflare regions, independent deployments or other applications.
+Cold isolates, other jobs using the Google credentials, larger workloads and
+provider limits can still throttle. Existing scanner backoffs and leases remain;
+the patch does not bypass them or change the video comparison algorithm.
+
+Local validation: 220 JavaScript tests and four Python completion tests passed.
+Focused tests measure request counts, in-flight sharing/eviction/isolation,
+concurrent commit recovery, quota-rejected writes, credential-scoped cooldowns,
+numeric/date Retry-After and authenticated runtime propagation. Existing tests
+cover stale atomic batches, lost responses, exclusive leases and duplicate queue
+identities. Live quota reduction and all-19-post matching require deployment and
+operator observation; no live scans or deletions were performed during validation.

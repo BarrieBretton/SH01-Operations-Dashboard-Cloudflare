@@ -68,6 +68,6 @@ export default {
   if(req.method==='GET'&&p==='/api/producers')return await liveProducerList(env);
   const m=p.match(/^\/api\/producers\/([^/]+)\/items$/);if(req.method==='GET'&&m)return await liveProducerItems(env,decodeURIComponent(m[1]),req);
   return error('Not found',404);
- }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed';return json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);}
+ }catch(e){const m=String(e.message||''),safe=/^[a-z][a-z0-9_]{2,100}$/.test(m)?m:'request_failed',response=json({error:safe},/^(store_|sheets_storage_)/.test(safe)?503:400);if(safe==='store_rate_limited')response.headers.set('Retry-After',String(Math.max(1,Math.ceil(Number(e.retryAfter)||75))));return response;}
  }
 };
