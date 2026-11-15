@@ -197,6 +197,7 @@ async function mirrorContentSheets(env){
 }
 async function contentApi(req,env,ctx) {
  const u=new URL(req.url),p=u.pathname;
+ if(['/api/content/media','/api/content/comments'].includes(p)&&req.method==='POST')return contentExtrasApi(req,env);
  if(p==='/api/content/status')return json(await contentStatus(env));
 
  if(p==='/api/ingest/posts'&&req.method==='POST')return json(await upsertPosts(env,(await body(req)).posts));
@@ -215,8 +216,8 @@ async function contentApi(req,env,ctx) {
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
   return json({rows:rows.slice(0,500),limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env)});
  }
- if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue));return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
- if(p==='/api/content'&&req.method==='GET')return json(await contentList(env,u));
+ if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue));if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
+ if(p==='/api/content'&&req.method==='GET'){const data=await contentList(env,u);if(typeof extrasDecorate==='function')data.rows=await extrasDecorate(env,data.rows);return json(data);}
  if(p==='/api/content/series'&&req.method==='GET'){
   const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id')),id=contentID(u.searchParams.get('post_id')),metric=u.searchParams.get('metric');if(!CONTENT_METRICS.has(metric))throw Error('unsupported_metric');
   const data=storeSort((await env.STORE.rows('content_observations')).filter(r=>r.platform===platform&&r.account_id===account&&r.post_id===id),'observed_at').slice(0,2001);

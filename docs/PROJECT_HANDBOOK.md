@@ -183,3 +183,85 @@ A temporary failure to read stored failures during reload now displays local req
 Local verification: 160 JavaScript tests and four Python completion tests pass. Controlled clock/input/network fixtures run against the built dashboard, covering activity beyond the old 30-minute limit, all registered input types, actual inactivity, automatic/synthetic/hidden activity exclusion, reload/deadline persistence, coalesced storage writes, storage failures, laptop-sleep expiry, stale timers, lock and HTTP 401, temporary restore errors, and late login/restore completion. HTML structure checks pass. The guarded installer verifies LF/CRLF, repeated application and conflict rejection before any writes. Browser visual verification and live deployment are still operator checks.
 
 Operator check after deployment: hard reload, unlock once, interact with any desk view and observe Auto-lock in N min reset to 30. Continued interaction beyond 30 minutes after login must keep it unlocked. Leaving it untouched for 30 minutes must lock it. No Sheet sync is needed for this session fix.
+
+## Post comments and persistent previews — 15 November 2026
+
+This supersedes the short-lived preview-cache descriptions above for the new
+Library and duplicate-gallery clients. No new binding, environment variable,
+Python service, schema or content write permission is required.
+
+**Code-confirmed:** Read-only Facebook/Instagram comment threads are available
+inside the existing hover/pinned information panels, with scrollable text and
+expandable replies. Library compact rows, Compare selections and identity-mapped
+queue entries also expose comment disclosures. Unmapped clickouts links remain
+external links; account identity is not inferred from a URL. Opening information
+for 500 ms (or pinning it) loads comments, 20 at a time. Replies load only on
+request; Load more follows signed, post-bound cursors on fixed Graph endpoints.
+No posting, replying, moderation, inbox synchronization or full Business Suite
+parity is claimed. API privacy, permissions and deleted content can limit the
+returned thread; unavailable is distinguished from an empty accessible page.
+Author names can be unavailable. Text is escaped, with relative ages and AM/PM
+UTC timestamps. Threads show collection time and the next refresh time.
+
+Comment pages are cached for five minutes, including explicit permission failures.
+There is no periodic comment polling or full-thread background crawl. Opening a
+panel after expiry or pressing Refresh comments revalidates; repeated refreshes
+inside that window reuse the page. Requests serialize in the browser, and failures
+appear inside that post's panel. Transient throttles set a shared browser cooldown
+of at least 75 seconds plus jitter, honoring longer Retry-After values. Graph
+short retries now have jitter and honor Retry-After; waits beyond five seconds or
+the request budget return a retryable response rather than retrying early.
+
+The authenticated `/api/content/media` POST caches image bytes in Cloudflare's
+Cache API for up to 24 hours, keyed by workbook, credential scope, post identity
+and media revision. This is best-effort, data-center-local shared caching, not
+permanent storage or global replication. Identical signed URLs changing only
+query parameters do not invalidate an unchanged image. Images changing bytes at
+the same URL path can remain stale for at most the TTL. MIME, HTTPS CDN allowlists,
+redirect targets and an 8 MiB streamed size limit apply. Images exceeding the cap
+show an explicit error and retain the original-post link. Signed media tickets
+avoid a Sheets lookup for each preview; dashboard authentication remains mandatory
+before any cache access. Tickets expire after six hours; refresh the library/group
+if requested. Auth/workbook/provider credential rotation isolates cache entries.
+No provider token is stored in tickets or persistent caches. Transient page access
+tokens are retained only in Worker memory for at most five minutes.
+
+The browser stores AES-GCM-encrypted image bytes, video URL descriptors and comment
+pages in IndexedDB, bounded to 160 entries / 64 MiB, with expired/oldest entries
+evicted on writes. Encryption keys derive from the current dashboard credential
+and cache scope; credentials and plaintext media/comments are not written to the
+cache. Reloads and later logins in the same browser reuse unexpired records.
+Browser eviction/private mode or denied storage can prevent persistence. Local
+caches are not shared between browsers; another browser may benefit from the
+Cloudflare cache. Hard reloads still refresh the library's current stored metadata
+and metrics. Lock clears decrypted state, pending requests and object URLs while
+retaining encrypted records. Late responses cannot repaint a new session.
+The library's Dates/layout/cache/export disclosure has a cache-clear action.
+
+Videos/Reels use cached source descriptors (up to 30 minutes, bounded by a known
+signed-URL expiry). Full videos are not prefetched or persisted: controls use
+preload=none, stream on play, and show a spinner when buffering. Stored posters
+may be shown where supplied; a poster is never presented as playable video.
+A failed video's explicit Retry requests a provider refresh, coalesced/cached for
+60 seconds and replacing the ordinary descriptor. Provider refreshes retain
+browser pacing. No automatic extra Meta account collection is added.
+
+**Local validation:** 179 JavaScript tests and four Python completion tests passed. Tests cover credential/ticket isolation, fixed
+pagination paths, unavailable permissions, escaping, reply paging, edge reuse
+across simulated isolates, encrypted browser reuse across simulated reloads,
+expiry/corruption, byte/count caps, redirects, video recovery, cooldowns and
+lock/late-response behavior. Existing dashboard suites and Python completion
+checks are also run. A real Chromium session could not start in this environment
+(socket permission restriction); desktop/mobile visual checks remain pending.
+
+**Unverified live:** deployed build, actual comment grants and completeness,
+Cloudflare cache-hit rate, browser quota behavior and real CDN playback. The
+previous screenshots prove neither this deployment nor these new permission
+checks. After deployment: open one Library info panel, pin it, load replies; open
+another post and verify isolation. Reload twice and inspect Network: already
+cached images should not POST /api/content/media again until expiry (unless the
+browser cleared storage). First-load images still download; cache population
+cannot eliminate that. Lock/unlock and verify private content clears while locked.
+Check both Library and duplicate groups. Verify a Reel loads on Play and its
+buffering indicator stops. This patch does not change scanner schedules,
+duplicate ranking, approval eligibility, cleanup confirmations or deletion flags.

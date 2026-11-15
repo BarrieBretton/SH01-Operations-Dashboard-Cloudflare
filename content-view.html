@@ -16,10 +16,10 @@
    <button class="btn" id="content-refresh" aria-describedby="content-error-inventory">Refresh library</button>
   </div>
   <p id="content-library-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="content-error-inventory" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><p id="content-library-notice" class="sub" role="status"></p>
-  <details class="filter-details"><summary>Dates, layout &amp; export</summary><div class="control">
+  <details class="filter-details"><summary>Dates, layout, cache &amp; export</summary><div class="control">
    <label>Published from (UTC)<input id="content-from" type="date"></label><label>Published through (UTC)<input id="content-to" type="date"></label>
    <label>Layout<select id="content-layout"><option value="cards">Media cards</option><option value="table">Compact table</option></select></label>
-   <button class="btn" id="content-export-csv">Export visible CSV</button><button class="btn" id="content-export-json">Export visible JSON</button>
+   <button class="btn" id="content-clear-cache">Clear saved previews &amp; comments</button><span class="sub" id="content-cache-notice">Images: up to 24 hours. Comments: five minutes, refreshed when opened. Videos stream on play.</span><button class="btn" id="content-export-csv">Export visible CSV</button><button class="btn" id="content-export-json">Export visible JSON</button>
   </div><p class="legend">Dates filter stored posts on the server. Load more to extend this subset; exports include the visible loaded records only. Account options come from loaded posts and discovered accounts.</p></details>
   <div id="content-stats" class="stats"></div>
   <div id="content-selection-bar" class="selection-bar hidden"><span id="content-selection-count">Select up to 4 posts on the same platform.</span><button class="btn" id="content-open-compare">Compare selection</button><button class="btn" id="content-clear-selection">Clear selection</button></div><div id="content-error-selection" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div>
