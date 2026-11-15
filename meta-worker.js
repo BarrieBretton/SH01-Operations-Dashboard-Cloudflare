@@ -40,6 +40,27 @@ async function metaIssue(db,asset,kind,metric,reason){await db.put('meta_capabil
 function safeMetricValues(raw){let values=[];for(let v of raw?.values||[])if(typeof v.value==='number'&&Number.isFinite(v.value))values.push({at:v.end_time||null,value:v.value});return values}
 
 
+function metaInstagramName(ig,previousName=''){
+ const username=String(ig?.username||'').trim(),name=clean(ig?.name||'',150).trim();
+ if(/^[A-Za-z0-9._]{1,30}$/.test(username))return '@'+username+(name&&name.toLowerCase()!==username.toLowerCase()?' · '+name:'');
+ return name||clean(previousName,200);
+}
+async function metaDiscoverNamedAccounts(call,token,state){
+ let expanded=!(Date.parse(state.instagram_name_retry_after||'')>Date.now());
+ async function request(path,params={}){
+  const base='id,name,instagram_business_account'+(path==='me/accounts'?',access_token':'');
+  const fields=expanded?base.replace('instagram_business_account','instagram_business_account{id,username,name}'):base;
+  try{return await call(path,token,{fields,...params});}
+  catch(e){
+   if(!expanded||!/^Graph error (100|200)$/.test(e.message))throw e;
+   // Optional profile fields must not stop existing account/post collection.
+   expanded=false;state.instagram_name_retry_after=new Date(Date.now()+86400000).toISOString();
+   return call(path,token,{fields:base,...params});
+  }
+ }
+ try{return await request('me/accounts',{limit:10,...(state.pages_after?{after:state.pages_after}:{})});}
+ catch(e){if(!/^Graph error (100|200)$/.test(e.message))throw e;const me=await request('me');return {data:me.id?[me]:[]};}
+}
 async function metaSync(env){
  await contentReady(env);const db=env.STORE,token=metaCredential(env.META_SYSVAR),version=env.META_GRAPH_VERSION||META_VERSION,lease=crypto.randomUUID();
  if(!await db.claim('content_jobs','meta_collect',lease,600000))return {status:'already_running'};
@@ -49,10 +70,10 @@ async function metaSync(env){
   const {tables}=await db.snapshot(['meta_assets','meta_content','meta_capabilities','content_collect_state']);
   state=JSON.parse(tables.content_collect_state.find(r=>r.id==='meta')?.payload||'{}');
   const capabilities=tables.meta_capabilities,assetRows=[],mediaRows=[],snapshotRows=[],capabilityRows=[],extraState=[],posts=[];
-  let discovered;try{discovered=await call('me/accounts',token,{fields:'id,name,instagram_business_account,access_token',limit:10,...(state.pages_after?{after:state.pages_after}:{})});}catch(e){if(!/^Graph error (100|200)$/.test(e.message))throw e;const me=await call('me',token,{fields:'id,name,instagram_business_account'});discovered={data:me.id?[me]:[]};}
+  const discovered=await metaDiscoverNamedAccounts(call,token,state);
   if(!Array.isArray(discovered.data))throw Error('discovery_data_missing');
   if(discovered.paging?.next&&!discovered.paging?.cursors?.after)throw Error('discovery_cursor_missing');
-  const freshTokens=new Map();for(const page of discovered.data){if(!page.id)continue;const id=String(page.id);freshTokens.set(id,page.access_token||token);assetRows.push({id,platform:'facebook',name:clean(page.name,200),page_id:null,updated_at:contentNow()});if(page.instagram_business_account?.id)assetRows.push({id:String(page.instagram_business_account.id),platform:'instagram',name:clean(page.name,200),page_id:id,updated_at:contentNow()});}
+  const freshTokens=new Map();for(const page of discovered.data){if(!page.id)continue;const id=String(page.id);freshTokens.set(id,page.access_token||token);assetRows.push({id,platform:'facebook',name:clean(page.name,200),page_id:null,updated_at:contentNow()});if(page.instagram_business_account?.id)assetRows.push({id:String(page.instagram_business_account.id),platform:'instagram',name:metaInstagramName(page.instagram_business_account,tables.meta_assets.find(a=>a.platform==='instagram'&&a.id===String(page.instagram_business_account.id))?.name),page_id:id,updated_at:contentNow()});}
   state.pages_after=discovered.paging?.next?discovered.paging.cursors.after:null;
   if(!state.pages_after)state.discovery_completed_at=contentNow();state.discovery_checked_at=contentNow();
   const assets=[...new Map([...tables.meta_assets,...assetRows].map(a=>[a.id,a])).values()];

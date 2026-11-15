@@ -63,9 +63,20 @@ async function upsertPosts(env,posts,source='publisher'){
   mergePostRecords(tx,records,at);
  });return {accepted:records.length,source,sheet_mirror:'pending'};
 }
+// Display-only account metadata. Internal identities and plan digests stay unchanged.
+function contentAccountName(row,assets=[],posts=[]){
+ const valid=value=>{const name=String(value||'').trim();return name&&name!==String(row.account_id)&&!/^\d{10,}$/.test(name)?name.slice(0,200):'';};
+ const asset=assets.find(a=>a.platform===row.platform&&String(a.id)===String(row.account_id));
+ const stored=valid(asset?.name);
+ if(stored)return {account_name:stored,account_name_source:row.platform==='instagram'?(stored.startsWith('@')?'instagram_profile':'stored_name'):'account_catalogue'};
+ const own=valid(row.account_handle);if(own)return {account_name:own,account_name_source:'stored_post'};
+ const candidates=posts.filter(r=>r.platform===row.platform&&String(r.account_id)===String(row.account_id)).sort((a,b)=>String(b.last_seen||'').localeCompare(String(a.last_seen||'')));
+ for(const post of candidates){const name=valid(post.account_handle);if(name)return {account_name:name,account_name_source:'stored_post'};}
+ return {account_name:'',account_name_source:'unavailable'};
+}
 async function contentList(env,u){
- let rows=await env.STORE.rows('content_posts');for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
- const q=(u.searchParams.get('q')||'').slice(0,100).toLowerCase();if(q)rows=rows.filter(r=>String(r.caption).toLowerCase().includes(q)||String(r.account_handle).toLowerCase().includes(q)||r.post_id.toLowerCase()===q);
+ const {tables}=await env.STORE.snapshot(['content_posts','meta_assets']);let rows=tables.content_posts.map(row=>({...row,...contentAccountName(row,tables.meta_assets)}));for(const k of ['platform','account_id'])if(u.searchParams.get(k)){const v=k==='platform'?contentPlatform(u.searchParams.get(k)):contentID(u.searchParams.get(k));rows=rows.filter(r=>r[k]===v);}
+ const q=(u.searchParams.get('q')||'').slice(0,100).toLowerCase();if(q)rows=rows.filter(r=>String(r.caption).toLowerCase().includes(q)||String(r.account_name||r.account_handle).toLowerCase().includes(q)||r.post_id.toLowerCase()===q);
  for(const key of ['from','to'])if(u.searchParams.get(key)){const v=u.searchParams.get(key);if(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!iso(v))throw Error('invalid_date');const date=v+(key==='to'?'T23:59:59.999Z':'T00:00:00.000Z');rows=rows.filter(r=>r.published_at&&(key==='from'?r.published_at>=date:r.published_at<=date));}
  const limit=Math.min(100,Math.max(1,Math.trunc(Number(u.searchParams.get('limit'))||50))),offset=Math.max(0,Math.trunc(Number(u.searchParams.get('offset'))||0));storeSort(rows,'-published_at','platform','account_id','post_id');return {rows:rows.slice(offset,offset+limit).map(publicPost),has_more:rows.length>offset+limit,next_offset:rows.length>offset+limit?offset+limit:null};
 }
@@ -216,7 +227,7 @@ async function contentApi(req,env,ctx) {
   const seen=new Set(rows.map(r=>r.permalink));for(const entry of sheet?.rows||[]){if(seen.has(entry.permalink))continue;let platform='unknown';const h=new URL(entry.permalink).hostname;if(h==='instagram.com'||h.endsWith('.instagram.com'))platform='instagram';else if(h==='facebook.com'||h.endsWith('.facebook.com'))platform='facebook';else if(h==='tumblr.com'||h.endsWith('.tumblr.com'))platform='tumblr';rows.push({request_id:'sheet-row-'+entry.row,platform,account_id:'',post_id:'',permalink:entry.permalink,status:'sheet_listed_unverified',reason:'Observed in clickouts URLS; mapping/actual deletion not verified',created_at:state.last_success});seen.add(entry.permalink);}
   return json({rows:rows.slice(0,500),limit:500,has_more:rows.length>500,clickouts_read:sheet?.status||'unavailable',clickouts_truncated:sheet?.truncated||false,sheet_status:await contentStatus(env)});
  }
- if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue));if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
+ if(p==='/api/content/groups'&&req.method==='GET'){const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets']);const groups=storeSort(tables.content_duplicate_groups,'-updated_at').slice(0,20);const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{const name=contentAccountName(group,tables.meta_assets,tables.content_posts);return {...group,...name,members:group.members.map(row=>({...row,...name}))};});if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);return json({rows,limit:20,scope:'same_platform_and_account',removal_schedule:'not_reported'});}
  if(p==='/api/content'&&req.method==='GET'){const data=await contentList(env,u);if(typeof extrasDecorate==='function')data.rows=await extrasDecorate(env,data.rows);return json(data);}
  if(p==='/api/content/series'&&req.method==='GET'){
   const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id')),id=contentID(u.searchParams.get('post_id')),metric=u.searchParams.get('metric');if(!CONTENT_METRICS.has(metric))throw Error('unsupported_metric');

@@ -265,3 +265,74 @@ cannot eliminate that. Lock/unlock and verify private content clears while locke
 Check both Library and duplicate groups. Verify a Reel loads on Play and its
 buffering indicator stops. This patch does not change scanner schedules,
 duplicate ranking, approval eligibility, cleanup confirmations or deletion flags.
+
+## Preview waiting status and queue correction — 15 November 2026
+
+Code inspection found a global queue gate at previewNextRequest. Both normal
+6–9 second provider-refresh spacing and longer storage/service cooldowns stopped
+all queued cards before their local cache could be checked. The generic waiting
+message did not distinguish either cause. This can explain long preview waits;
+it does not identify which live request caused an individual operator's delay.
+
+The browser now schedules each delayed job separately, leaving its two available
+preview slots free for other cards. Local encrypted-cache hits, in-memory hits
+and directly usable stored media can display during a network cooldown. Jobs
+that need a deferred API request retain their retry deadline, nearest-card
+priority, cancellation and at most two automatic retries of actual failures.
+Checking cached entries does not issue a provider request. First-time downloads
+and expired/missing links can still require network work and deliberate pacing.
+
+Waiting cards show a per-second countdown and distinguish normal request spacing,
+storage rate limiting, provider rate limiting and a busy preview service. Longer
+Retry-After deadlines remain enforced. Tab exit and lock cancel countdown timers;
+late responses remain guarded. Comment-triggered service cooldowns also carry
+an explicit reason, and affected preview jobs wait instead of displaying a
+permanent error during that temporary cooldown. No scheduler interval, backend
+quota, credential or persistent-cache lifetime is changed.
+
+Local tests exercise cached cards passing a waiting network card, countdown
+updates without early requests, bounded retries, persistent-cache reuse during
+a cooldown and cancellation. Deployment and live timing measurements remain
+operator checks. This change supplements the preceding comments/cache patch.
+
+## Readable account and duplicate-group labels — 15 November 2026
+
+Duplicate selectors now group by platform and a readable account name, with labels
+such as "Instagram · @username · Group 1 · 7 photos · Previously confirmed".
+Group numbers remain stable when the loaded result is reordered or filtered;
+they are presentation labels for the current loaded set, not permanent IDs.
+Accounts with identical display names remain separate. Internal platform,
+account ID and group ID continue to identify every selection and cleanup plan.
+Raw IDs remain available in the collapsed similarity evidence details.
+
+The groups and Library endpoints attach display-only account names from the
+exact platform/account match in meta_assets, with a stored post name as fallback.
+The asset table is read in the same batched snapshot, without per-card storage
+requests or provider calls on dropdown render. Name changes do not mutate post
+identity or invalidate the metric/source digest of an existing cleanup plan.
+The same label helper is used in gallery details, account filters, Compare,
+duplicate member tables and queue rows where an account can be resolved.
+
+Instagram discovery previously copied the linked Facebook Page's name. The
+existing discovery request now asks for the linked Instagram user's username
+and name and stores the returned handle/display name. It does not add one
+profile request per account. If optional fields receive Graph error 100/200,
+discovery falls back to the preceding field list and suppresses that optional
+expansion for 24 hours. Other failures retain their existing handling. A stored
+legacy name is retained until a real profile name is returned; the selected
+group explains this fallback. Missing names are shown as "Account name
+unavailable", never silently substituted with a numeric account ID.
+
+The combined installer includes the preceding unapplied preview-wait correction
+and these account/group label changes. It retains the existing comments and
+persistent-preview cache implementation. No new environment variables, bindings,
+Python services or scanner changes are required.
+
+Validation covers name escaping, platform/account isolation, duplicate display
+names, filtering/reorder selection stability, matched asset enrichment, plan
+identity through a rename, actual Instagram profile fields and graceful optional
+field fallback. All 190 JavaScript tests and four Python completion tests passed;
+the built HTML has 175 unique IDs and passes the existing structure checks.
+Live deployment and actual Meta field permissions remain operator checks. After
+deployment, refresh groups; a successful subsequent Meta discovery will supply
+the actual Instagram username when the provider permits it.

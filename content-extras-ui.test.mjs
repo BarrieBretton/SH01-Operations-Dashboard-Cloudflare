@@ -4,12 +4,13 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 const source=fs.readFileSync(new URL('./content-extras-ui.js',import.meta.url),'utf8');
+const queueSource=fs.readFileSync(new URL('./content-view.js',import.meta.url),'utf8').split('// Warm nearby previews only; all requests share a bounded queue.')[1].split('const contentInfoPinned=')[0];
 // Minimal asynchronous IndexedDB transaction fixture; data survives new VM sessions.
 function fakeIDB(rows){const db={objectStoreNames:{contains:()=>true},close(){},transaction(){const tx={};let jobs=0,ended=false;const finish=()=>setImmediate(()=>{if(!jobs&&!ended){ended=true;tx.oncomplete?.();}});const request=fn=>{jobs++;const r={};setImmediate(()=>{r.result=fn();r.onsuccess?.();jobs--;finish();});return r;};const store={get:id=>request(()=>rows.get(id)),getAll:()=>request(()=>[...rows.values()]),put:r=>{rows.set(r.id,structuredClone(r));},delete:id=>rows.delete(id),clear:()=>{rows.clear();return request(()=>undefined)}};tx.objectStore=()=>store;tx.abort=()=>{ended=true;tx.onabort?.();};finish();return tx;}};return {open(){const r={};setImmediate(()=>{r.result=db;r.onsuccess?.();});return r;}};}
 const row={platform:'instagram',account_id:'1',post_id:'2',cache_scope:'credential-scope',media_revision:'revision',extras_ticket:'signed'};
 function setup(rows=new Map()){
  let requests=0,revoked=[],objects=0;const widgets=new Map();const c={console,crypto:webcrypto,indexedDB:fakeIDB(rows),TextEncoder,TextDecoder,Uint8Array,Date,Map,Set,JSON,Blob,Response,AbortController,DOMException,btoa,atob,setTimeout,clearTimeout,token:'secret',authEpoch:1,previewNextRequest:0,URL:{createObjectURL:()=>{objects++;return 'blob:private-'+objects},revokeObjectURL:v=>revoked.push(v)},contentKey:r=>r.platform+':'+r.account_id+':'+r.post_id,contentDate:s=>s||'Unknown',relativeContentDate:()=> '1h ago',safeContentMedia:u=>String(u||'').startsWith('https://')?u:'',esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),link:()=>'<a>Original</a>',$:()=>null,document:{addEventListener(){},querySelectorAll:()=>[...widgets.values()]},fetch:async()=>{requests++;return new Response(new Uint8Array([1,2,3]),{headers:{'Content-Type':'image/png','X-Extras-Expires':String(Date.now()+86400000)}})}};
- vm.createContext(c);vm.runInContext(source,c);return {c,rows,widgets,requests:()=>requests,revoked};
+ vm.createContext(c);vm.runInContext(queueSource+'\n'+source,c);return {c,rows,widgets,requests:()=>requests,revoked};
 }
 test('encrypted image bytes survive a hard reload and reopening a session without a network request',async()=>{
  const h=setup();const a=await h.c.persistentPostPreview(row);assert.equal(a.local_blob,true);assert.equal(h.requests(),1);assert.equal(h.rows.size,1);const record=[...h.rows.values()][0];assert.deepEqual(Object.keys(record).sort(),['cipher','id','iv','saved','size','until']);assert.doesNotMatch(JSON.stringify(record),/secret|instagram|image\/png|signed/);
@@ -38,5 +39,10 @@ test('threads escape comment markup, show local loading, paginate replies and re
  const fresh=setup(h.rows);fresh.c.postCommentWidget(row,id);await fresh.c.loadPostComments(id);assert.equal(fresh.requests(),0);
 });
 test('rate limits honor Retry-After, show local feedback and suppress subsequent requests during cooldown',async()=>{
- const h=setup();h.c.fetch=async()=>Response.json({error:'store_rate_limited'},{status:503,headers:{'Retry-After':'120'}});await assert.rejects(h.c.postExtrasRequest('/api/content/comments',row),e=>e.previewRetry===true);assert.ok(vm.runInContext('postExtrasCooldown-Date.now()',h.c)>=120000);h.c.fetch=async()=>{throw Error('should not call')};await assert.rejects(h.c.postExtrasRequest('/api/content/comments',row),/cooling down/);
+ const h=setup();h.c.fetch=async()=>Response.json({error:'store_rate_limited'},{status:503,headers:{'Retry-After':'120'}});await assert.rejects(h.c.postExtrasRequest('/api/content/comments',row),e=>e.previewRetry===true);assert.ok(vm.runInContext('postExtrasCooldown-Date.now()',h.c)>=120000);h.c.fetch=async()=>{throw Error('should not call')};await assert.rejects(h.c.postExtrasRequest('/api/content/comments',row),e=>e.deferred===true&&e.retryAt>Date.now());
+});
+
+test('encrypted images remain usable during a service cooldown with no preview API call',async()=>{
+ const h=setup();await h.c.persistentPostPreview(row);const fresh=setup(h.rows);vm.runInContext("postExtrasCooldown=Date.now()+120000;postExtrasWaitReason='storage';setPreviewWait(postExtrasCooldown,'storage')",fresh.c);const image=await fresh.c.persistentPostPreview(row);assert.equal(image.local_blob,true);assert.equal(fresh.requests(),0);
+ await assert.rejects(fresh.c.persistentPostPreview({...row,post_id:'uncached'}),e=>e.deferred===true&&e.retryAt>Date.now()&&e.waitReason==='storage');assert.equal(fresh.requests(),0);
 });

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const read=n=>fs.readFileSync(new URL(n,import.meta.url),'utf8');
 function setup(){
- const sql=new DatabaseSync(':memory:');sql.exec(read('./content-schema.sql'));
+ const sql=new DatabaseSync(':memory:');sql.exec(read('./content-schema.sql'));sql.exec(read('./meta-schema.sql'));
  function prepare(q){let a=[];return {bind(...v){a=v;return this},run(){return {meta:{changes:sql.prepare(q).run(...a).changes}}},all(){return {results:sql.prepare(q).all(...a)}},first(){return sql.prepare(q).get(...a)}}}
  const env={DB:{prepare,batch(a){sql.exec('BEGIN');try{const r=a.map(x=>x.run());sql.exec('COMMIT');return r}catch(e){sql.exec('ROLLBACK');throw e}}},GOOGLE_SHEETS_WRITE_ENABLED:'1'};
  const ctx={URL,Date,crypto:webcrypto,TextEncoder,console,JSON,Map,Set,Number,AbortSignal,clean:(s,n=500)=>String(s??'').slice(0,n),iso:s=>{const d=new Date(s);return Number.isNaN(+d)?null:d.toISOString()},producerURL:s=>s,json:x=>x,error:(m,s)=>({error:m,status:s}),producerHash:async s=>Array.from(new Uint8Array(await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('')};
@@ -69,7 +69,7 @@ test('groups endpoint uses one consistent snapshot for all groups and preserves 
  for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
  s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
  const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
- s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue']);return snapshot(tables)};
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets']);return snapshot(tables)};
  s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
  const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
  assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
@@ -140,4 +140,19 @@ test('weighted plans retain stale-metric protection and do not create provider m
  await s.c.upsertPosts(s.env,[post(4,{metrics:{views:100,likes:99}})]);
  await assert.rejects(s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation}),/group_or_metrics_changed/);
  assert.ok(s.sql.prepare('SELECT metrics FROM content_observations').all().every(x=>!Object.hasOwn(JSON.parse(x.metrics),'weighted_score')));
+});
+
+test('account labels use the matched platform catalogue and do not change stored posts or cleanup-plan identity',async()=>{
+ const s=setup();await group(s);const plan=await s.c.planCleanup(s.env,{group_id:'g',keep_count:1,keep_strategy:'best',metric:'views'});
+ s.sql.prepare('INSERT INTO meta_assets(id,platform,name,updated_at) VALUES(?,?,?,?)').run('12345','instagram','@exact.ig · Display Name','2026-11-15T00:00:00Z');
+ const get=path=>s.c.contentApi({url:'https://d.test'+path,method:'GET'},s.env,{});
+ const groups=await get('/api/content/groups');assert.equal(groups.rows[0].account_name,'@exact.ig · Display Name');assert.equal(groups.rows[0].account_name_source,'instagram_profile');assert.equal(groups.rows[0].members[0].account_name,'@exact.ig · Display Name');assert.equal(groups.rows[0].group_id,'g');
+ const library=await get('/api/content?q=exact.ig');assert.equal(library.rows.length,4);assert.equal(library.rows[0].account_name,'@exact.ig · Display Name');assert.equal(s.sql.prepare('SELECT account_handle FROM content_posts LIMIT 1').get().account_handle,'');
+ s.sql.prepare('UPDATE meta_assets SET name=? WHERE id=?').run('@renamed.ig','12345');await s.c.queueCleanup(s.env,{plan_id:plan.plan_id,confirmation:plan.confirmation});assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,3);
+});
+
+test('name fallback cannot borrow another platform or account name',async()=>{
+ const s=setup();await group(s);s.sql.prepare('INSERT INTO meta_assets(id,platform,name,updated_at) VALUES(?,?,?,?)').run('12345','facebook','Wrong Facebook Page','2026-11-15T00:00:00Z');
+ let response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].account_name,'');assert.equal(response.rows[0].account_name_source,'unavailable');
+ await s.c.upsertPosts(s.env,[post(1,{account_handle:'Stored Instagram name'})]);response=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(response.rows[0].account_name,'Stored Instagram name');assert.equal(response.rows[0].account_name_source,'stored_post');
 });

@@ -22,3 +22,27 @@ test('rate-limited jobs stay queued and stopping cancels their scheduled recover
  assert.equal(vm.runInContext('previewQueue.length',h.c),1);assert.equal(vm.runInContext('previewQueue[0].retries',h.c),1);
  vm.runInContext("token='';stopAutoPreviews(true)",h.c);assert.equal(vm.runInContext('previewResumeTimer',h.c),null);
 });
+
+test('a network cooldown delays only that job; nearby cached and stored previews still display',async()=>{
+ const h=harness(),shown=[],requests=[];let now=Date.now();const timers=new Map();let serial=0;
+ Object.assign(h.c,{Date:class extends Date{static now(){return now}},setTimeout:(fn,ms)=>{timers.set(++serial,{fn,ms});return serial},clearTimeout:id=>timers.delete(id),contentKey:r=>r.post_id,safeContentMedia:v=>v?.startsWith('https://safe/')?v:'',URLSearchParams,contentRequest:async()=>{requests.push(now);return {available:true,url:'https://safe/fresh',kind:'image'}}});
+ h.c.performContentPreview=async index=>{const data=await h.c.previewResponse(index===0?{post_id:'needs-provider'}:{post_id:'stored-'+index,preview_url:'https://safe/'+index,preview_type:'image'});shown.push({index,data});};
+ vm.runInContext("setPreviewWait(Date.now()+75000,'storage');loadContentPreview(0);loadContentPreview(1);loadContentPreview(2);loadContentPreview(3)",h.c);
+ await new Promise(r=>setImmediate(r));assert.deepEqual(shown.map(x=>x.index),[1,2,3]);assert.equal(requests.length,0);assert.equal(vm.runInContext('previewQueue.length',h.c),1);assert.match(h.boxes[0].dataset.loadingLabel,/Storage rate limit.*75s/);
+ now+=1000;vm.runInContext('drainPreviews()',h.c);assert.match(h.boxes[0].dataset.loadingLabel,/74s/);assert.equal(requests.length,0);assert.ok([...timers.values()].every(x=>x.ms<=1000));
+ now+=74000;vm.runInContext('drainPreviews()',h.c);await new Promise(r=>setImmediate(r));assert.equal(requests.length,1);assert.equal(shown.at(-1).index,0);assert.equal(vm.runInContext('previewQueue.length',h.c),0);vm.runInContext("token='';stopAutoPreviews(true)",h.c);assert.equal(timers.size,0);
+});
+
+test('normal spacing and rate limits have different countdown labels',()=>{
+ const h=harness();const at=Date.now()+6000;assert.match(h.c.previewWaitLabel({retryAt:at,waitReason:'pacing'}),/spacing requests/);assert.match(h.c.previewWaitLabel({retryAt:at,waitReason:'rate_limit'}),/Service rate limit/);assert.match(h.c.previewWaitLabel({retryAt:at,waitReason:'busy'}),/Preview service busy/);
+});
+
+test('real rate-limit failures retry twice, then stop without continuously issuing requests',async()=>{
+ const h=harness();let now=Date.now(),calls=0;
+ Object.assign(h.c,{Date:class extends Date{static now(){return now}},setTimeout:()=>1,clearTimeout(){}});
+ h.c.performContentPreview=async()=>{calls++;throw Object.assign(Error('rate limited'),{previewRetry:true,retryAt:now+75000,waitReason:'storage'});};
+ vm.runInContext('loadContentPreview(0)',h.c);await new Promise(r=>setImmediate(r));assert.equal(calls,1);
+ vm.runInContext('drainPreviews()',h.c);await new Promise(r=>setImmediate(r));assert.equal(calls,1);
+ for(let n=0;n<2;n++){now+=75000;vm.runInContext('drainPreviews()',h.c);await new Promise(r=>setImmediate(r));}
+ assert.equal(calls,3);assert.equal(vm.runInContext('previewQueue.length',h.c),0);assert.match(h.boxes[0].innerHTML,/Retry preview/);vm.runInContext("token='';stopAutoPreviews(true)",h.c);
+});
