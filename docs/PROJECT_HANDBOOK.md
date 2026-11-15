@@ -811,3 +811,7 @@ Validation for this update: 282 Node tests and four Python completion tests pass
 ## Review defaults — 16 November 2026
 
 At the operator’s request, new page loads and cleared/locked sessions default to Keep highest score / metric and Number to keep 1. Users can still change both controls; ordinary group changes and preview cancellation retain their current choices. Weighted score remains Views × 1 + Likes × 10. Defaults alone perform no requests or queue action: Preview removal plan and exact typed confirmation remain required. This supersedes the former blank UI defaults; backend strategy/count validation remains explicit.
+
+## Review colour contrast — 16 November 2026
+
+Removal preview borders, decision labels and legend markers now use bright red (#ff3333); keep markers use saturated green (#00e676). Light-theme equivalents use #d9001b and #007a35 for readable text. These review-only colour tokens retain the existing amber queued state and do not change review, ranking or queue behaviour. Generated dashboard and Worker rebuilt.
