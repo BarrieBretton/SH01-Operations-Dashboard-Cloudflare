@@ -63,3 +63,15 @@ test('Ambiguous clickouts write is quarantined instead of automatically re-appen
  assert.equal(s.sql.prepare('SELECT status FROM content_deletion_queue').get().status,'awaiting_sheet');
 });
 // Built Worker routes are exercised against the direct Sheets API harness in sheets-storage.test.mjs.
+
+test('groups endpoint uses one consistent snapshot for all groups and preserves missing-member evidence',async()=>{
+ const s=setup();await group(s);
+ for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
+ s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
+ const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts']);return snapshot(tables)};
+ s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
+ const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
+ assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
+ for(const g of r.rows){assert.ok(g.missing_members.includes('2'));assert.ok(g.members.every(p=>p.account_id==='12345'&&p.platform==='instagram'));assert.equal(g.review_status,'candidate_requires_confirmation');}
+});

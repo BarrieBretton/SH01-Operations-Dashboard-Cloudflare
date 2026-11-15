@@ -10,7 +10,7 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
  get('content-metric').value='views';get('content-layout').value='cards';
  return {context,get,requests,api:context.inspectContent};
@@ -73,4 +73,52 @@ test('producer stock renders before slow source evidence and repeated checks coa
  assert.match(get('producer-refresh-status').textContent,/Source evidence:.*store_rate_limited/);assert.equal(get('refresh-producers').disabled,false);
  context.fetch=async path=>({ok:true,status:200,json:async()=>path==='/api/producers'?{rows:[],sync:{status:'ok',last_success:'2026-11-14T22:07:00Z'}}:{rows:[],schedule:[]}});
  await api.loadProducers();assert.match(get('producer-refresh-status').textContent,/Stored stock unchanged/);assert.doesNotMatch(get('producer-refresh-status').textContent,/store_rate_limited/);
+});
+
+test('throttled group refresh retains selection and galleries, blocks plans, recovers after cooldown',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');
+ const g={group_id:'g',platform:'instagram',account_id:'acct',members:[post]};
+ api.setGroups([g]);get('content-group').value='0';api.renderContentGroup();
+ const cards=get('content-group-cards').innerHTML;let calls=0;
+ const timers=new Map();let next=0;
+ context.setTimeout=(fn,ms)=>{timers.set(++next,{fn,ms});return next};context.clearTimeout=id=>timers.delete(id);
+ context.fetch=async path=>{calls++;return {status:path.endsWith('/groups')?503:200,ok:!path.endsWith('/groups'),headers:{get:()=> '120'},json:async()=>path.endsWith('/groups')?{error:'store_rate_limited'}:{rows:[]}}};
+ await api.loadCleanup();assert.equal(api.getGroups().length,1);assert.equal(get('content-group').value,'0');assert.equal(get('content-group-cards').innerHTML,cards);assert.equal(api.isCleanupFresh(),false);assert.equal(get('content-plan').disabled,true);
+ await assert.rejects(api.previewContentPlan(),/Refresh groups and queue/);assert.equal(calls,2);
+ const retry=[...timers.values()].find(t=>t.ms>=120000);assert.ok(retry);assert.ok(retry.ms<135001);
+ await api.loadCleanup();assert.equal(calls,2,'manual clicks respect cooldown');
+ context.Date=class extends Date{static now(){return Date.now()+140000}};
+ context.fetch=async path=>{calls++;return {status:200,ok:true,json:async()=>({rows:path.endsWith('/groups')?[g]:[]})}};
+ await api.loadCleanup();assert.equal(api.isCleanupFresh(),true);assert.equal(get('content-group').value,'0');assert.equal(get('content-plan').disabled,false);assert.match(get('content-cleanup-notice').textContent,/Returned 1/);assert.ok(![...timers.values()].some(t=>t.ms>=75000));
+});
+
+test('first-load throttling is not empty evidence and retry is cancelled on navigation and lock',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');
+ const timers=new Map();let next=0,calls=0;
+ context.setTimeout=(fn,ms)=>{timers.set(++next,{fn,ms});return next};context.clearTimeout=id=>timers.delete(id);
+ context.fetch=async path=>{calls++;return {status:503,ok:false,json:async()=>({error:'store_rate_limited'})}};
+ await api.loadCleanup();assert.match(get('content-group-info').textContent,/does not mean no groups/);
+ const retry=[...timers.values()].find(t=>t.ms>=75000);assert.ok(retry);
+ await api.showContentView('compare');assert.ok(![...timers.values()].some(t=>t.ms>=75000));await retry.fn();assert.equal(calls,2);
+ api.setView('cleanup');await api.loadCleanup();const second=[...timers.values()].find(t=>t.ms>=75000);assert.ok(second);api.lock();await second.fn();assert.equal(calls,2);assert.equal(api.getGroups().length,0);
+});
+
+test('overlapping cleanup refreshes share requests and permanent errors are not automatically retried',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');
+ const resolves=[];context.fetch=()=>new Promise(r=>resolves.push(r));
+ const a=api.loadCleanup(),b=api.loadCleanup();assert.equal(resolves.length,2);
+ for(const r of resolves)r({status:403,ok:false,json:async()=>({error:'forbidden'})});
+ await Promise.all([a,b]);assert.match(get('content-cleanup-notice').textContent,/403/);assert.equal(api.isCleanupFresh(),false);
+});
+
+test('storage throttling automatically retries at most twice and stops when the main view is hidden',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');
+ let now=Date.now(),next=0,calls=0;const timers=new Map();
+ context.Date=class extends Date{static now(){return now}};
+ context.setTimeout=(fn,ms)=>{timers.set(++next,{fn,ms});return next};context.clearTimeout=id=>timers.delete(id);
+ context.fetch=async()=>{calls++;return {status:503,ok:false,json:async()=>({error:'store_rate_limited'})}};
+ await api.loadCleanup();
+ for(let i=0;i<2;i++){const [id,t]=[...timers.entries()].find(([,t])=>t.ms>=75000);timers.delete(id);now+=100000;await t.fn();}
+ assert.equal(calls,6);assert.equal(timers.size,0);assert.match(get('content-cleanup-notice').textContent,/Refresh again after/);
+ now+=100000;await api.loadCleanup();const [,t]=[...timers.entries()].find(([,t])=>t.ms>=75000);get('meta-view').classList.add('hidden');now+=100000;await t.fn();assert.equal(calls,8);
 });
