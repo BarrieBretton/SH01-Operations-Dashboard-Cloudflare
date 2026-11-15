@@ -10,6 +10,15 @@ function producerStatusValue(row) {
 }
 function producerReady(row) {const s=producerStatusValue(row);return !s.conflict && s.value==='staged' && producerText(row.approved).toLowerCase()==='yes';}
 function producerConsumed(row) {const s=producerStatusValue(row);return !s.conflict && consumedStates.has(s.value);}
+function producerApprovalBreakdown(items){
+ const result={approval_breakdown_version:1,staged_unapproved_count:0,staged_approval_no_count:0,staged_approval_blank_count:0,staged_approval_other_count:0};
+ for(const row of items){const status=producerStatusValue(row),approved=producerText(row.approved).toLowerCase();
+  if(row.status_conflict||status.conflict||status.value!=='staged'||approved==='yes')continue;
+  result.staged_unapproved_count++;
+  result[approved==='no'?'staged_approval_no_count':approved===''?'staged_approval_blank_count':'staged_approval_other_count']++;
+ }
+ return result;
+}
 function producerURL(value) {
  try {const u=new URL(String(value));if(!['http:','https:'].includes(u.protocol)||u.username||u.password)return '';
  if(u.hostname==='api.telegram.org' && /\/bot[^/]+/.test(u.pathname))return '';

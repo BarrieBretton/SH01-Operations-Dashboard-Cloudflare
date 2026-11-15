@@ -35,7 +35,8 @@ def verify(client):
  seen=set();total=0
  for p in data['rows']:
   group=(p['source_tab'],p['account']);assert group not in seen,'Mixed/duplicate pool';seen.add(group)
-  count=ready=consumed=0;offset=0;ids=set()
+  count=ready=consumed=waiting=no=blank=other=0;offset=0;ids=set()
+  assert p.get('approval_breakdown_version')==1,'Queue Sheets sync to collect the approval breakdown first'
   while offset is not None:
    page=get('/api/producers/'+quote(p['producer_id'],safe='')+'/items?'+urlencode({'version':p['version'],'offset':offset}))
    assert page['version']==p['version'],'Snapshot changed during read'
@@ -43,10 +44,14 @@ def verify(client):
     assert row['item_id'] not in ids,'Duplicate item';ids.add(row['item_id']);count+=1
     expected=not row.get('status_conflict') and row['status'].strip().lower()=='staged' and row['approved'].strip().lower()=='yes'
     assert bool(row['ready'])==expected,'Eligibility mismatch';ready+=expected;consumed+=bool(row.get('consumed'))
+    approval=row['approved'].strip().lower()
+    if not row.get('status_conflict') and row['status'].strip().lower()=='staged' and approval!='yes':
+     waiting+=1;no+=approval=='no';blank+=approval=='';other+=approval not in ('no','')
    offset=page['next_offset']
   assert (count,ready,consumed)==(p['total_count'],p['ready_count'],p['consumed_count']),'Summary/items mismatch';total+=count
+  assert (waiting,no,blank,other)==(p['staged_unapproved_count'],p['staged_approval_no_count'],p['staged_approval_blank_count'],p['staged_approval_other_count']),'Approval breakdown/items mismatch'
  assert all(s['remaining'] is None for s in catalog['rows']),'Unmeasured source was given a remaining count'
- print('PASS strict eligibility, per-tab/account pools, item pagination, snapshot totals and unknown-source handling')
+ print('PASS strict eligibility, per-tab/account pools, item pagination, snapshot totals, approval breakdown and unknown-source handling')
  print('Stock pools:',len(seen),'items checked:',total,'workflow definitions inventoried:',catalog['coverage']['workflows'])
  print('Routing evidence:',catalog['schedule_evidence'])
  print('Optional tab reads unavailable:',sum(r['status']!='ok' for r in catalog['references']))

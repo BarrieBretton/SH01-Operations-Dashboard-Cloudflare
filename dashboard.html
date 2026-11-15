@@ -61,7 +61,7 @@ html[data-theme=light]{--success:#17683b;--success-bg:#e4f5ec;--warn:#805100;--w
 .action-panel{border:1px solid var(--line);border-radius:14px;background:var(--field);padding:22px;margin:24px 0 32px}.action-panel h3{margin:6px 0 10px}.action-panel .cleanup-plan{padding-top:8px}.step-label{display:block;color:var(--accent);font-size:11px;letter-spacing:.07em;font-weight:700;text-transform:uppercase;margin:8px 0}
 #content-plan-panel{background:var(--panel)}.control{row-gap:14px}.control label{line-height:1.5}.control input,.control select{min-height:42px}
 #content-plan,#content-plot,#content-open-compare,#unlock{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:650}#content-plan:disabled,#content-plot:disabled,#content-open-compare:disabled{background:var(--field);color:var(--muted);border-color:var(--line)}
-#content-clear-selection,#content-plan-cancel,#close-items{background:transparent;border-color:transparent;text-decoration:underline;text-underline-offset:3px}
+#content-clear-selection,#content-plan-cancel{background:transparent;border-color:transparent;text-decoration:underline;text-underline-offset:3px}
 .content-nav{gap:4px}.content-nav .btn{border-color:transparent;border-radius:6px 6px 0 0;background:transparent;box-shadow:none}.content-nav [aria-selected=true]{border-color:transparent;box-shadow:inset 0 -2px var(--accent);background:var(--field)}
 #content-selection-bar:not(.hidden){position:sticky;top:8px;z-index:12;box-shadow:0 4px 20px #0002}#content-error-selection:not(.hidden){position:sticky;top:74px;z-index:12}
 #content-library-notice:empty,#content-plan-notice:empty,#content-confirm-notice:empty,#producer-sync-status:empty,#failure-status:empty{display:none}
@@ -92,29 +92,32 @@ button.is-loading::before{margin-right:8px}button.is-loading{cursor:progress}
 .media-preview.preview-loading>.preview-placeholder{visibility:hidden}
 @media(prefers-reduced-motion:reduce){.loading-indicator.is-loading::before,button.is-loading::before,.media-preview.preview-loading::before{animation:none}}
 
+/* Eligible source items stay beneath their account/source pool. */
+#producer-stats{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}.approval-count strong{color:var(--warn)}.producer-expand{min-width:145px;white-space:nowrap}.producer-expand[aria-expanded=true]{border-color:var(--info);background:var(--info-bg)}
+.producer-children>td{padding:0 12px 16px 24px;background:var(--bg)}.producer-item-detail{padding:14px 18px;border-left:3px solid var(--info);border-radius:0 0 10px 10px;background:var(--panel)}.producer-item-detail h4{margin:0 0 6px}.producer-item-detail .scroll{max-height:520px}.producer-item-detail td{white-space:normal;overflow-wrap:anywhere}.producer-item-detail .sub{margin:8px 0}.producer-item-detail .btn{margin-top:10px}
+
 /* END CONTENT UI STYLES */
 </style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">SH01 / system observability</div><h1 class="title">Operations desk<span style="color:#81d5b7">.</span></h1><p>Failures, source inventory and published content in one workspace.</p><div class="meta">Historical records begin when a source is connected. Stock reflects the latest sheet sync.</div></div><div class="top-tools"><span class="meta" id="session-age"></span><button class="btn" id="theme">Light mode</button><div class="meta" id="freshness">No data loaded</div></div></header><section id="login" class="card secret-panel"><div class="eyebrow">Private access</div><h2>Unlock dashboard</h2><p>Enter the dashboard token set in this Worker's secrets. Your unlock lasts 30 minutes in this tab, including reloads.</p><input id="token" class="secret" type="password" autocomplete="off" aria-label="Dashboard token"><p><button class="btn" id="unlock">Open dashboard</button></p><p id="login-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="notice" role="alert"></div></section><section id="app" class="hidden"><div id="global-notice" role="status" aria-live="polite" class="hidden"></div><div class="nav" role="tablist"><button id="tab-failures" role="tab" aria-selected="true">Failures</button><button id="tab-producers" role="tab" aria-selected="false">Producers</button><button id="tab-meta" role="tab" aria-selected="false">Content &amp; analytics</button><button class="btn" id="lock" style="margin-left:auto">Lock</button></div><div id="failure-view" class="card"><div class="eyebrow">Event timeline</div><h2>Failures</h2><p class="legend">Dates are UTC. No matching records does not prove the source is healthy. Coverage starts when each source is connected; messages are sanitized summaries.</p><div class="control"><label>Search<input id="failure-search" class="search" placeholder="Workflow, error text, service…"></label><label>Source<select id="failure-source"><option value="">All sources</option><option value="n8n">n8n</option><option value="sh01">SH01 Python</option></select></label><button class="btn" id="refresh-failures" aria-describedby="failure-error failure-status">Refresh failures</button></div><details class="desk-tools"><summary>Date filters (UTC)</summary><div class="control"><label>From<input type="date" id="from" aria-describedby="failure-error"></label><label>To<input type="date" id="to" aria-describedby="failure-error"></label></div></details><p id="failure-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="failure-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><p id="failure-status" class="sub" role="status"></p><div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Source</th><th>Workflow / service</th><th>Error</th><th>Open</th></tr></thead><tbody id="failures"></tbody></table></div><div id="failure-empty" class="empty hidden">No matching failures have been ingested.</div><p id="failure-more-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="failure-more-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><button id="more" class="btn hidden" style="margin-top:16px">Load more</button></div><!-- BEGIN PRODUCER VIEW -->
 <div id="producer-view" class="card hidden">
  <div class="eyebrow">Source provenance / inventory</div><h2>Producers &amp; workflow inputs</h2>
- <p class="legend">Stock is eligible only when <strong>status = staged AND approved = yes</strong> (trimmed, case-insensitive). Uploaded is consumed. A workflow association does not prove that a branch ran.</p>
+ <p class="legend">Stock is eligible only when <strong>status = staged AND approved = yes</strong> (trimmed, case-insensitive). Staged rows whose approved value is not yes are counted separately as awaiting approval. Uploaded is consumed. A workflow association does not prove that a branch ran.</p>
  <div id="sheet-health" class="legend" role="status">No source snapshot loaded.</div>
 
- <p id="producer-job-loading" class="loading-indicator hidden" role="status" aria-live="polite"></p><div id="producer-stats" class="stats"></div>
- <details><summary>What these counts mean</summary><p class="legend">The stock table groups by workbook, tab and account, matching the account-level Streamables selector. Creator is item metadata. Low inventory means count &lt; minimum required. The default minimum is 3; the workflow's CFG override was redacted and is unverified. Zero eligible items is different from every item being consumed. Stale snapshots are never shown as currently healthy. Row-state totals for other queues are not eligible media counts.</p></details>
+ <p id="producer-job-loading" class="loading-indicator hidden" role="status" aria-live="polite"></p><div id="producer-stats" class="stats"></div><p id="producer-approval-summary" class="legend" role="status"></p>
+ <details><summary>What these counts mean</summary><p class="legend">The stock table groups by workbook, tab and account, matching the account-level Streamables selector. Creator is item metadata. Low inventory means count &lt; minimum required. The default minimum is 3; the workflow's CFG override was redacted and is unverified. Awaiting approval includes staged rows with approved=no, blank, or another non-yes value. Conflicting statuses are excluded. These counts reflect the Sheet status; they do not verify B2 files. Zero eligible items is different from every item being consumed. Stale snapshots are never shown as currently healthy. Row-state totals for other queues are not eligible media counts.</p></details>
  <h3>Measured Sheet stock</h3>
  <div class="control">
   <label>Search<input id="producer-search" class="search" placeholder="Account, tab, creator, workflow"></label>
-  <label>Status<select id="producer-status"><option value="">All</option><option value="consumed">Consumed</option><option value="empty">No eligible items</option><option value="low">Low inventory</option><option value="ready">Ready</option><option value="stale">Stale</option><option value="unknown">Unknown</option></select></label>
+  <label>Status<select id="producer-status"><option value="">All</option><option value="consumed">Consumed</option><option value="empty">No eligible items</option><option value="awaiting">Awaiting approval</option><option value="low">Low inventory</option><option value="ready">Ready</option><option value="stale">Stale</option><option value="unknown">Unknown</option></select></label>
   <label>Freshness<select id="producer-fresh"><option value="">All snapshots</option><option value="stale">Stale / unverified</option><option value="fresh">Within 30 minutes</option></select></label>
-  <label>Sort<select id="producer-sort"><option value="attention">Needs attention</option><option value="name">Account name</option><option value="remaining">Fewest eligible</option></select></label>
+  <label>Sort<select id="producer-sort"><option value="attention">Needs attention</option><option value="name">Account name</option><option value="remaining">Fewest eligible</option><option value="approval">Most awaiting approval</option></select></label>
   <button class="btn" id="refresh-producers">Refresh stored data</button>
  </div>
  <details class="desk-tools"><summary>Source sync &amp; export</summary><p class="legend">Refresh stored data checks the saved snapshot. Queue Sheets sync requests a new collection from the source.</p><button class="btn" id="sheet-sync-now" aria-describedby="producer-sync-status producer-sync-error">Queue Sheets sync</button><button class="btn" id="export-producers">Export stock CSV</button><p id="producer-sync-status" class="sub" role="status"></p><p id="producer-sync-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="producer-sync-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div></details>
  <p id="producer-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="producer-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div>
  <p id="producer-refresh-status" class="legend" role="status" aria-live="polite">Refresh reloads the stored snapshot. Source collection runs separately; use Queue Sheets sync to request it.</p>
- <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Status</th><th>Workflow association</th><th>Source collected (UTC)</th><th>Items</th></tr></thead><tbody id="producers"></tbody></table></div>
+ <div class="scroll"><table><thead><tr><th>Account / source</th><th>Eligible / total</th><th>Staged · awaiting approval</th><th>Status</th><th>Workflow association</th><th>Source collected (UTC)</th><th>Eligible items</th></tr></thead><tbody id="producers"></tbody></table></div>
  <div id="producer-empty" class="empty hidden">No matching verified stock. Queue a Sheets sync if this is the first run after the correction.</div>
- <div id="item-panel" class="hidden"><button class="btn" id="close-items">Close items</button><h3 id="item-title">Items</h3><p id="producer-items-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="producer-items-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><p class="sub">Links only; no media downloaded. All pages belong to the same snapshot. Links requiring expired signed credentials may need refreshing at the source.</p><div class="scroll"><table><thead><tr><th>Tab / row / creator</th><th>Item link</th><th>Status</th><th>Approved</th><th>Eligibility</th></tr></thead><tbody id="items"></tbody></table></div><p id="producer-items-more-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="producer-items-more-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><button class="btn hidden" id="more-items">Load more items</button></div>
  <details class="schedule-panel"><summary>Workflow schedule <span class="sub">· configured times and source evidence</span></summary>
   <p class="legend">Times below reproduce the workflow-schedule values. A configured time does not prove a run occurred. No next-run time is inferred from these records.</p><p id="schedule-evidence" class="sub"></p>
   <div class="scroll"><table><thead><tr><th>Workflow / Sheet row</th><th>Account routing</th><th>Configured timing</th><th>Run setting</th><th>Resolution</th></tr></thead><tbody id="schedule-rows"></tbody></table></div>
@@ -232,7 +235,7 @@ function deskRequestLoading(path,body){
  let id,label,buttons=[];
  if(p==='/api/failures'){
   id=Number(more)>0?'failure-more-loading':'failure-loading';label=Number(more)>0?'Loading more failures…':'Refreshing failures…';buttons=['refresh-failures','tab-failures'];if(Number(more)>0)buttons.push('more');
- }else if(p.endsWith('/items')){id=Number(more)>0?'producer-items-more-loading':'producer-items-loading';label='Loading source items…';buttons=['more-items'];}
+ }else if(p.endsWith('/items'))return ()=>{}; // Expanded producer rows render their own local loading state.
  else if(p==='/api/producers'){id='producer-loading';label='Refreshing stored stock…';buttons=['refresh-producers','tab-producers'];}
  else if(p==='/api/producer-sources'){id='producer-sources-loading';label='Loading source evidence and schedules…';buttons=['refresh-producers','tab-producers'];}
  else if(p==='/api/sheets/sync'){id='producer-sync-loading';label='Requesting source collection…';buttons=['sheet-sync-now'];}
@@ -257,15 +260,15 @@ const sourceDate=v=>{if(!v)return null;let s=String(v);if(/^\d{4}-\d\d-\d\d \d\d
 const isStale=p=>p.source_stale!==undefined?p.source_stale:!sourceDate(p.updated_at)||Date.now()-sourceDate(p.updated_at)>1800000;
 const workflowRefs=p=>{try{let x=JSON.parse(p.workflow_names||'[]');return Array.isArray(x)?x:[]}catch{return []}};
 function banner(message='',bad=false){$('global-notice').textContent=message;$('global-notice').classList.toggle('hidden',!message);$('global-notice').classList.toggle('bad',bad)}
-const deskFeedbackIds=['failure-error','failure-more-error','producer-error','producer-items-error','producer-items-more-error','producer-sync-error','producer-sources-error'];
+const deskFeedbackIds=['failure-error','failure-more-error','producer-error','producer-sync-error','producer-sources-error'];
 function setActionFeedback(id,message=''){
- const node=$(id);if(!node)return;const changed=node.textContent!==message;node.textContent=message;node.classList.toggle('hidden',!message);
+ if(!id)return;const node=$(id);if(!node)return;const changed=node.textContent!==message;node.textContent=message;node.classList.toggle('hidden',!message);
  if(message&&changed){let parent=node.parentElement;while(parent){if(parent.tagName==='DETAILS')parent.open=true;parent=parent.parentElement;}}
 }
-function deskFeedbackTarget(path){return path.includes('/items')?'producer-items-error':path.startsWith('/api/failures')?'failure-error':path.startsWith('/api/producer-sources')?'producer-sources-error':'producer-error';}
+function deskFeedbackTarget(path){return path.includes('/items')?null:path.startsWith('/api/failures')?'failure-error':path.startsWith('/api/producer-sources')?'producer-sources-error':'producer-error';}
 showError=function(e){if(e.name==='AbortError'||!token)return;setActionFeedback(e.feedbackTarget||(e.dashboardScope==='producer-view'?'producer-error':'failure-error'),e.message||'Request failed');};
 const oldLock=lock;
-lock=function(){authEpoch++;resetDeskLoading();$('sheet-sync-now').disabled=false;for(let c of inflight.values())c.abort();inflight.clear();sessionExpires=0;oldLock();producerList=[];filteredProducers=[];sourceReport=null;sourceRows=[];itemPage=null;producerLoad=null;producerRowsSignature=null;$('producer-refresh-status').textContent='';for(const id of deskFeedbackIds)setActionFeedback(id,'');$('failure-status').textContent='';$('producer-sync-status').textContent='';offset=0;clearContentState();for(let id of ['producers','failures','items','producer-stats','source-rows','source-queues','source-issues','source-coverage'])$(id).replaceChildren();$('meta-view').classList.add('hidden');$('item-panel').classList.add('hidden');$('session-age').textContent='';$('freshness').textContent='Locked';banner()};
+lock=function(){authEpoch++;resetDeskLoading();$('sheet-sync-now').disabled=false;for(let c of inflight.values())c.abort();inflight.clear();sessionExpires=0;oldLock();producerList=[];filteredProducers=[];sourceReport=null;sourceRows=[];clearProducerExpansions();producerLoad=null;producerRowsSignature=null;$('producer-refresh-status').textContent='';for(const id of deskFeedbackIds)setActionFeedback(id,'');$('failure-status').textContent='';$('producer-sync-status').textContent='';offset=0;clearContentState();for(let id of ['producers','failures','producer-stats','producer-approval-summary','source-rows','source-queues','source-issues','source-coverage'])$(id).replaceChildren();$('meta-view').classList.add('hidden');$('session-age').textContent='';$('freshness').textContent='Locked';banner()};
 $('lock').onclick=()=>lock();
 saveSession=function(){sessionExpires=Date.now()+SESSION_MS;try{sessionStorage.setItem(SESSION_KEY,JSON.stringify({token,expires:sessionExpires}))}catch{banner('Session storage unavailable; reload will require signing in.')}clearTimeout(sessionTimer);sessionTimer=setTimeout(lock,SESSION_MS)};
 try{let saved=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(saved&&saved.expires>Date.now())sessionExpires=Math.min(saved.expires,Date.now()+SESSION_MS)}catch{}
@@ -726,7 +729,7 @@ setInterval(()=>{if(!token||typeof document.querySelectorAll!=='function')return
 
 // BEGIN PRODUCER UI LOGIC
 // Runs inside the dashboard closure; all source labels are escaped at rendering.
-let sourceReport=null,sourceRows=[],sourcePage=0,itemPage=null;
+let sourceReport=null,sourceRows=[],sourcePage=0;
 function status(p){if(p.measurement!=='measured'||p.ready_count===null)return 'unknown';if(isStale(p))return 'stale';if(!p.ready_count)return p.total_count>0&&p.consumed_count===p.total_count?'consumed':'empty';return p.ready_count<p.threshold?'low':'ready'}
 function stockBadge(s){const colors={consumed:'red',empty:'red',low:'amber',ready:'green',stale:'amber',unknown:'muted'};const titles={consumed:'Consumed',empty:'No eligible items',low:'Low inventory',ready:'Ready',stale:'Stale',unknown:'Unknown'};return '<span class="badge '+colors[s]+'">'+titles[s]+'</span>'}
 let producerLoad=null,producerRowsSignature=null;
@@ -767,14 +770,26 @@ async function loadProducerSnapshot(epoch){
 }
 
 function renderProducers(){
+ reconcileProducerExpansions();
+ const focused=document.activeElement?.id;
  const terms=$('producer-search').value.trim().toLowerCase().split(/\s+/),desired=$('producer-status').value,fresh=$('producer-fresh').value;
- const rows=producerList.filter(p=>terms.every(t=>(p.name+' '+p.account+' '+p.source_tab+' '+(p.creators||[]).join(' ')+' '+workflowRefs(p).join(' ')).toLowerCase().includes(t))&&(!desired||status(p)===desired)&&(!fresh||(fresh==='stale')===isStale(p)));
+ const rows=producerList.filter(p=>terms.every(t=>(p.name+' '+p.account+' '+p.source_tab+' '+(p.creators||[]).join(' ')+' '+workflowRefs(p).join(' ')).toLowerCase().includes(t))&&(!desired||(desired==='awaiting'?approvalCount(p)>0:status(p)===desired))&&(!fresh||(fresh==='stale')===isStale(p)));
  const order=$('producer-sort').value,rank={consumed:0,empty:0,low:1,stale:2,unknown:3,ready:4};
- rows.sort((a,b)=>order==='name'?String(a.name).localeCompare(b.name):order==='remaining'?a.ready_count-b.ready_count:rank[status(a)]-rank[status(b)]||String(a.name).localeCompare(b.name));filteredProducers=rows;
- $('producer-stats').innerHTML=[['Stock pools',producerList.length],['No eligible / consumed',producerList.filter(p=>['empty','consumed'].includes(status(p))).length],['Low',producerList.filter(p=>status(p)==='low').length],['Stale / unknown',producerList.filter(p=>['stale','unknown'].includes(status(p))).length]].map(([label,n])=>'<span>'+esc(label)+'<strong>'+n+'</strong></span>').join('');
- $('producers').innerHTML=rows.map(p=>'<tr><td><strong>'+esc(p.name)+'</strong>'+tagList([p.source_tab,'Account-level pool',...(p.creators||[])])+'</td><td><strong>'+esc(p.ready_count)+' eligible</strong><div class="sub">'+esc(p.total_count)+' total · '+esc(p.consumed_count)+' consumed · '+esc(p.total_count-p.ready_count-p.consumed_count)+' other</div><div class="sub">Low below '+esc(p.threshold)+' · '+esc(p.threshold_source)+(p.status_conflicts?' · '+esc(p.status_conflicts)+' conflicting statuses':'')+'</div></td><td>'+stockBadge(status(p))+'</td><td>'+tagList(workflowRefs(p))+'<div class="sub">'+esc(p.reference_status)+'</div></td><td>'+contentTimeBlock(p.updated_at)+'</td><td><button class="btn item-button" data-id="'+esc(p.producer_id)+'">See items</button></td></tr>').join('');
+ rows.sort((a,b)=>order==='name'?String(a.name).localeCompare(b.name):order==='remaining'?a.ready_count-b.ready_count:order==='approval'?(approvalCount(b)??-1)-(approvalCount(a)??-1)||String(a.name).localeCompare(b.name):rank[status(a)]-rank[status(b)]||String(a.name).localeCompare(b.name));filteredProducers=rows;
+ const pending=producerList.map(approvalCount),eligible=producerList.map(p=>producerCount(p.ready_count)),sum=values=>values.reduce((n,x)=>n+(x??0),0),total=values=>values.length&&values.every(x=>x!==null)?sum(values):'Unknown';
+ $('producer-stats').innerHTML=[['Stock pools',producerList.length],['Eligible items',total(eligible)],['Staged · awaiting approval',total(pending)],['No eligible / consumed pools',producerList.filter(p=>['empty','consumed'].includes(status(p))).length],['Low pools',producerList.filter(p=>status(p)==='low').length],['Stale / unknown pools',producerList.filter(p=>['stale','unknown'].includes(status(p))).length]].map(([label,n])=>'<span>'+esc(label)+'<strong>'+esc(n)+'</strong></span>').join('');
+ $('producer-approval-summary').textContent='Totals cover all loaded stock pools; table filters do not change these totals. '+(producerList.some(isStale)?'Includes last known counts from '+producerList.filter(isStale).length+' stale pools. ':'')+(pending.some(x=>x===null)?sum(pending)+' awaiting approval counted so far; '+pending.filter(x=>x===null).length+' pools need a new Sheets sync for this breakdown. ':'')+'Approve reviewed staged rows in the source Sheet, then wait for source collection or use Queue Sheets sync. Rows still staged will move into eligible; rows already used by a workflow may instead be consumed.';
+ $('producers').innerHTML=rows.map(p=>{
+  const awaiting=approvalCount(p),count=producerCount(p.ready_count),entry=producerExpansions.get(p.producer_id),dom=producerDomId(p.producer_id);
+  const measured=[p.total_count,p.ready_count,p.consumed_count].every(v=>producerCount(v)!==null),difference=p.total_count-p.ready_count-p.consumed_count-(awaiting??0),other=measured&&difference>=0?difference:'Unknown';
+  const approval=awaiting===null?'<strong>Not collected yet</strong><div class="sub">Queue Sheets sync to measure approval backlog.</div>':'<strong>'+esc(awaiting)+' awaiting approval</strong><div class="sub">'+esc(p.staged_approval_no_count)+' no · '+esc(p.staged_approval_blank_count)+' blank · '+esc(p.staged_approval_other_count)+' other approval value</div>';
+  const toggle=count>0?'<button class="btn producer-expand'+(entry?.loading?' is-loading':'')+'" id="'+esc(dom)+'-toggle" data-producer-toggle="'+esc(p.producer_id)+'" aria-expanded="'+Boolean(entry?.open)+'" aria-controls="'+esc(dom)+'-children" aria-label="'+(entry?.open?'Collapse':'Expand')+' '+esc(count)+' eligible items for '+esc(p.name)+'"><span aria-hidden="true">'+(entry?.open?'▾':'▸')+'</span> '+(entry?.open?'Hide':'View')+' '+esc(count)+' eligible</button>':'<span class="sub">'+(count===0?'No eligible items':'Eligibility unknown')+'</span>';
+  return '<tr class="producer-pool"><td><strong>'+esc(p.name)+'</strong>'+tagList([p.source_tab,'Account-level pool',...(p.creators||[])])+'</td><td><strong>'+esc(count??'Unknown')+' eligible</strong><div class="sub">'+esc(p.total_count)+' total · '+esc(p.consumed_count)+' consumed · '+esc(other)+(awaiting===null?' other (approval not measured)':' other')+'</div><div class="sub">Low below '+esc(p.threshold)+' · '+esc(p.threshold_source)+(p.status_conflicts?' · '+esc(p.status_conflicts)+' conflicting statuses':'')+'</div></td><td class="approval-count">'+approval+'</td><td>'+stockBadge(status(p))+'</td><td>'+tagList(workflowRefs(p))+'<div class="sub">'+esc(p.reference_status)+'</div></td><td>'+contentTimeBlock(p.updated_at)+'</td><td>'+toggle+'</td></tr>'+producerExpansionHTML(p);
+ }).join('');
  $('producer-empty').classList.toggle('hidden',rows.length>0);
+ if(focused?.startsWith('producer-')&&(focused.endsWith('-toggle')||focused.endsWith('-more')))$(focused)?.focus?.({preventScroll:true});
 }
+
 function renderSources(){
  if(!sourceReport)return;
  const terms=$('source-search').value.trim().toLowerCase().split(/\s+/),kind=$('source-kind').value,scope=$('source-scope').value,state=$('source-state').value;
@@ -791,26 +806,64 @@ function renderProducerSchedule(){
  const value=v=>v===undefined||v===null||v===''?'Unknown':typeof v==='object'?JSON.stringify(v):String(v);
  $('schedule-rows').innerHTML=rows.length?rows.map(r=>'<tr><td><strong>'+(r.workflow_url||r.workflow_id?link(r.workflow_url||(sourceReport.workflow_base_url||'').replace(/\/$/,'')+'/workflow/'+encodeURIComponent(r.workflow_id),r.workflow_name||r.workflow_id):esc(r.workflow_name||'Unresolved workflow'))+'</strong><div class="sub">Sheet row '+esc(r.row??r.source_row??'Unknown')+'</div></td><td>'+tagList(r.accounts||[])+'</td><td><span class="clock-label">'+clock+esc(value(r.timings))+'</span><div class="sub">'+esc(r.timezone||'Timezone unverified')+'</div></td><td>'+contentState(value(r.run))+'</td><td>'+contentState(r.resolution||'Unverified')+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No schedule records are available.</td></tr>';
 }
+const producerExpansions=new Map();
+const producerDomId=id=>'producer-'+encodeURIComponent(id);
+const producerCount=v=>Number.isSafeInteger(v)&&v>=0?v:null;
+function approvalCount(p){return p.approval_breakdown_version===1?producerCount(p.staged_unapproved_count):null;}
+function stopProducerExpansion(entry){entry.run=null;entry.loading=false;entry.pending=null;inflight.get('/api/producers/'+encodeURIComponent(entry.id)+'/items')?.abort();}
+function clearProducerExpansions(){for(const entry of producerExpansions.values())stopProducerExpansion(entry);producerExpansions.clear();}
+function reconcileProducerExpansions(){
+ for(const [id,entry] of producerExpansions){const p=producerList.find(x=>x.producer_id===id);
+  if(!p||!(producerCount(p.ready_count)>0)){stopProducerExpansion(entry);producerExpansions.delete(id);continue;}
+  if(entry.version!==p.version||entry.count!==p.ready_count){stopProducerExpansion(entry);producerExpansions.set(id,{id,version:p.version,count:p.ready_count,open:entry.open,rows:[],next:0,loaded:false,notice:'The source snapshot changed. Reload eligible items to see the current rows.'});}
+ }
+}
+function eligibleItemRows(rows){return rows.map(x=>'<tr><td>'+esc(x.origin)+' · row '+esc(x.source_row??x.item_id)+'</td><td>'+esc(x.creator_handle||'Not recorded')+'</td><td>'+link(x.item_url,x.item_label||'Open source ↗')+'</td><td>'+esc(x.status)+'</td><td>'+esc(x.approved)+'</td></tr>').join('');}
+function producerExpansionHTML(p){
+ if(!(producerCount(p.ready_count)>0))return '';
+ const entry=producerExpansions.get(p.producer_id),dom=producerDomId(p.producer_id);
+ if(!entry?.open)return '<tr id="'+esc(dom)+'-children" class="producer-children hidden"><td colspan="7"></td></tr>';
+ const rows=entry.rows||[],loading=entry.loading;
+ const control=loading?'<p class="loading-indicator is-loading" role="status">Loading eligible items…</p>':entry.error?'<p class="action-feedback" role="status">'+esc(entry.error)+'</p>':'';
+ const action=!loading&&(!entry.loaded||entry.error||entry.next!==null)?'<button class="btn" id="'+esc(dom)+'-more" data-producer-more="'+esc(p.producer_id)+'">'+(entry.error?'Retry eligible items':entry.loaded?'Load more eligible items':'Load eligible items')+'</button>':'';
+ return '<tr id="'+esc(dom)+'-children" class="producer-children"><td colspan="7"><section class="producer-item-detail" aria-label="Eligible items for '+esc(p.name)+'"><h4>'+esc(p.name)+' · '+esc(rows.length)+' / '+esc(p.ready_count)+' eligible items loaded</h4><p class="sub">Source: '+esc(p.source_tab)+' · collected '+esc(contentDate(p.updated_at))+(isStale(p)?' · stale snapshot':'')+'. Staged and approved=yes only.</p>'+(entry.notice?'<p class="sub">'+esc(entry.notice)+'</p>':'')+'<div class="scroll" aria-busy="'+Boolean(loading)+'"><table><thead><tr><th>Source row</th><th>Creator / handle</th><th>Source link</th><th>Status</th><th>Approved</th></tr></thead><tbody>'+eligibleItemRows(rows)+'</tbody></table></div>'+control+action+(entry.loaded&&entry.next===null&&!entry.error?'<p class="sub">All '+esc(rows.length)+' eligible items from this snapshot are shown.</p>':'')+'</section></td></tr>';
+}
 async function showItems(id){
- const p=producerList.find(x=>x.producer_id===id);if(!p)return;
- setActionFeedback('producer-items-error','');setActionFeedback('producer-items-more-error','');itemPage={id,version:p.version,offset:0};$('items').replaceChildren();$('item-title').textContent=p.name+' · '+p.source_tab;$('item-panel').classList.remove('hidden');$('item-panel').scrollIntoView({behavior:'smooth',block:'nearest'});await loadItemPage();
+ const p=producerList.find(x=>x.producer_id===id);if(!p||!(producerCount(p.ready_count)>0))return;
+ reconcileProducerExpansions();let entry=producerExpansions.get(id);
+ if(entry?.open){entry.open=false;stopProducerExpansion(entry);renderProducers();return;}
+ if(!entry){entry={id,version:p.version,count:p.ready_count,rows:[],next:0,loaded:false};producerExpansions.set(id,entry);}
+ entry.open=true;renderProducers();if(!entry.loaded)return loadProducerEligibleItems(id);
 }
-async function loadItemPage(){
- if(!itemPage)return;const current=itemPage,epoch=authEpoch,target=current.offset?'producer-items-more-error':'producer-items-error';setActionFeedback(target,'');try{
- const d=await api('/api/producers/'+encodeURIComponent(current.id)+'/items?'+new URLSearchParams({version:current.version,offset:String(current.offset)}));if(itemPage!==current)return;
- $('items').insertAdjacentHTML('beforeend',d.rows.map(x=>'<tr><td>'+esc(x.origin)+' · '+esc(x.source_row??x.item_id)+'<div class="sub">'+esc(x.creator_handle)+'</div></td><td>'+link(x.item_url,x.item_label||'Open item')+'</td><td>'+esc(x.status)+(x.status_conflict?' · CONFLICT':'')+'</td><td>'+esc(x.approved)+'</td><td>'+esc(x.ready?'Eligible':x.consumed?'Consumed':x.status_conflict?'Status conflict':'Not eligible')+'</td></tr>').join(''));
- current.offset=d.next_offset;$('more-items').classList.toggle('hidden',d.next_offset===null);
- }catch(e){if(itemPage!==current||epoch!==authEpoch)return;e.feedbackTarget=target;throw e;}
+async function loadProducerEligibleItems(id){
+ const entry=producerExpansions.get(id);if(!entry?.open||!token)return;if(entry.pending)return entry.pending;if(entry.loaded&&entry.next===null)return;
+ const epoch=authEpoch,run={},offset=entry.loaded?entry.next:0;entry.run=run;entry.loading=true;entry.error='';entry.notice='';renderProducers();
+ const current=()=>epoch===authEpoch&&producerExpansions.get(id)===entry&&entry.run===run&&entry.open;
+ const work=(async()=>{
+  try{
+   const data=await api('/api/producers/'+encodeURIComponent(id)+'/items?'+new URLSearchParams({version:entry.version,offset:String(offset),eligibility:'ready'}));if(!current())return;
+   if(data.version!==entry.version||data.eligibility!=='ready'||data.total!==entry.count||!Array.isArray(data.rows))throw Error('Eligible items do not match the displayed snapshot. Refresh stored data, then reopen this row.');
+   const rows=data.rows,ids=new Set(entry.rows.map(x=>x.item_id));
+   for(const row of rows){if(typeof row.item_id!=='string'||ids.has(row.item_id)||Number(row.ready)!==1||row.status_conflict||String(row.status).trim().toLowerCase()!=='staged'||String(row.approved).trim().toLowerCase()!=='yes')throw Error('Unexpected item eligibility or duplicate row. Refresh stored data before retrying.');ids.add(row.item_id);}
+   const total=entry.rows.length+rows.length,next=data.next_offset;
+   if(next===null?total!==data.total:!Number.isSafeInteger(next)||next!==offset+rows.length||!rows.length||next>=data.total)throw Error('Eligible item pagination is incomplete. Refresh stored data before retrying.');
+   entry.rows.push(...rows);entry.next=next;entry.loaded=true;
+  }catch(e){if(current())entry.error=e.name==='AbortError'?'Loading eligible items timed out. Retry this row.':e.message||'Eligible items could not be loaded.';}
+  finally{if(current()){entry.loading=false;entry.pending=null;entry.run=null;renderProducers();}}
+ })();entry.pending=work;return work;
 }
+
 function downloadProducerFile(name,contents,type){const u=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 for(const id of ['producer-search','producer-status','producer-fresh','producer-sort'])$(id).addEventListener('input',renderProducers);
 for(const id of ['source-search','source-kind','source-scope','source-state'])$(id).addEventListener('input',()=>{sourcePage=0;renderSources()});
 $('source-prev').onclick=()=>{sourcePage--;renderSources()};$('source-next').onclick=()=>{sourcePage++;renderSources()};
 $('export-sources').onclick=()=>{if(sourceReport)downloadProducerFile('producer-sources-evidence.json',JSON.stringify({...sourceReport,rows:sourceRows},null,2),'application/json')};
-$('export-producers').onclick=()=>{const cols=['source_tab','account','ready_count','total_count','consumed_count','threshold','threshold_source','reference_status','updated_at'];const cell=v=>{let s=String(v??'');if(/^\s*[=+@-]/.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"'};downloadProducerFile('producer-stock.csv',[cols.join(','),...filteredProducers.map(p=>cols.map(k=>cell(p[k])).join(','))].join('\r\n'),'text/csv')};
-$('close-items').onclick=()=>{itemPage=null;$('item-panel').classList.add('hidden');for(const [k,c] of inflight)if(k.endsWith('/items'))c.abort()};
-guarded('more-items',loadItemPage);
+$('export-producers').onclick=()=>{const cols=['source_tab','account','ready_count','staged_unapproved_count','staged_approval_no_count','staged_approval_blank_count','staged_approval_other_count','total_count','consumed_count','threshold','threshold_source','reference_status','updated_at'];const cell=v=>{let s=String(v??'');if(/^\s*[=+@-]/.test(s)||/^[\t\r\n]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"'};downloadProducerFile('producer-stock.csv',[cols.join(','),...filteredProducers.map(p=>cols.map(k=>cell(p[k])).join(','))].join('\r\n'),'text/csv')};
+$('producers').addEventListener('click',e=>{
+ const toggle=e.target.closest('[data-producer-toggle]'),more=e.target.closest('[data-producer-more]');
+ if(toggle)showItems(toggle.dataset.producerToggle);else if(more)loadProducerEligibleItems(more.dataset.producerMore);
+});
 
 // END PRODUCER UI LOGIC
-$('producers').addEventListener('click',e=>{let b=e.target.closest('.item-button');if(b)showItems(b.dataset.id).catch(showError)});try{let saved=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(saved?.token&&saved.expires>Date.now()){token=saved.token;sessionTimer=setTimeout(lock,saved.expires-Date.now());loadFailures().then(()=>{$('login').classList.add('hidden');$('app').classList.remove('hidden')}).catch(()=>{lock();$('notice').textContent='Session expired or access rejected'})}else clearSession()}catch{clearSession()}})();
+try{let saved=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(saved?.token&&saved.expires>Date.now()){token=saved.token;sessionTimer=setTimeout(lock,saved.expires-Date.now());loadFailures().then(()=>{$('login').classList.add('hidden');$('app').classList.remove('hidden')}).catch(()=>{lock();$('notice').textContent='Session expired or access rejected'})}else clearSession()}catch{clearSession()}})();
 </script></body></html>

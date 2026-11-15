@@ -22,7 +22,7 @@ export function setup(){
  let fail=null;
  const fetch=async u=>{if(fail==='all')return {ok:false,status:403};if(u.includes('oauth2'))return {ok:true,json:async()=>({access_token:'test-access'})};const range=decodeURIComponent(u.split('/values/')[1]||''),name=range.split("'")[1];if(fail===name)return {ok:false,status:403};return {ok:true,json:async()=>({values:fixtures[name]||[['status'],['staged'],['used']]})}};
  const c={collectorDiagnostic:()=>{},crypto:webcrypto,TextEncoder,AbortSignal,URLSearchParams,URL,Date,Map,Set,setTimeout,console,clean:s=>String(s),json:x=>x,error:(m,s)=>({error:m,status:s}),fetch};
- attachStore(env,sql,c);vm.createContext(c);vm.runInContext(code+';globalThis.f={sheetRows,sheetSync,liveProducerList,liveProducerItems,sheetStatus,producerSources,producerReady,producerConsumed,producerStatusValue,producerStockState,producerThreshold,producerURL};',c);
+ attachStore(env,sql,c);vm.createContext(c);vm.runInContext(code+';globalThis.f={sheetRows,sheetSync,liveProducerList,liveProducerItems,sheetStatus,producerSources,producerReady,producerApprovalBreakdown,producerConsumed,producerStatusValue,producerStockState,producerThreshold,producerURL};',c);
  return {env,c,sql,fixtures,fail:x=>{fail=x}};
 }
 test('strict availability: staged + yes only, aliases, whitespace, conflicts and uploaded',()=>{
@@ -73,4 +73,39 @@ test('leases prevent overlapping collection and duplicate headers fail closed',a
 });
 test('item URLs discard credentials and signed query strings while preserving ordinary links',()=>{
  const {c}=setup();assert.equal(c.f.producerURL('https://example.test/item?token=secret&v=abc'),'https://example.test/item?v=abc');assert.equal(c.f.producerURL('https://user:pass@example.test/x'),'');assert.equal(c.f.producerURL('javascript:alert(1)'),'');assert.equal(c.f.producerURL('https://api.telegram.org/bot123:abc/getFile'),'');
+});
+
+test('approval backlog separates staged no, blank and other values while excluding conflicts and consumed items',async()=>{
+ const {env,c,fixtures}=setup();fixtures.streamables=[['account','creator_handle','status','approved','state','URL'],
+ ['a','yes',' Staged ',' YES ','','https://youtube.com/shorts/yes'],['a','no','staged',' NO ','','https://youtube.com/shorts/no'],
+ ['a','blank','staged','','','https://youtube.com/shorts/blank'],['a','other','staged','true','',''],['a','alias','','no',' Staged ',''],
+ ['a','consumed','uploaded','no','',''],['a','pending','pending','no','',''],['a','conflict','staged','no','uploaded','']];
+ await c.f.sheetSync(env);const p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');
+ assert.equal(p.ready_count,1);assert.equal(p.staged_unapproved_count,4);assert.equal(p.staged_approval_no_count,2);assert.equal(p.staged_approval_blank_count,1);assert.equal(p.staged_approval_other_count,1);assert.equal(p.consumed_count,1);assert.equal(p.status_conflicts,1);assert.equal(p.approval_breakdown_version,1);
+ const page=await c.f.liveProducerItems(env,p.producer_id,{url:'https://test/?eligibility=ready&version='+p.version});assert.equal(page.rows.length,1);assert.equal(page.rows[0].item_url,'https://youtube.com/shorts/yes');assert.equal(page.eligibility,'ready');assert.equal(page.total,1);assert.equal(page.next_offset,null);
+});
+
+test('manual approval moves still-staged rows from backlog to eligible only after successful collection',async()=>{
+ const {env,c,fixtures,fail}=setup();fixtures.streamables=[['account','creator_handle','status','approved'],['a','review','staged','no']];await c.f.sheetSync(env);
+ let p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');assert.equal(p.ready_count,0);assert.equal(p.staged_unapproved_count,1);
+ fixtures.streamables[1][3]='yes';fail('streamables');await c.f.sheetSync(env);p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');assert.equal(p.ready_count,0);assert.equal(p.staged_unapproved_count,1);assert.equal(p.source_stale,true);
+ fail(null);await c.f.sheetSync(env);p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');assert.equal(p.ready_count,1);assert.equal(p.staged_unapproved_count,0);
+ fixtures.streamables[1][2]='uploaded';await c.f.sheetSync(env);p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');assert.equal(p.ready_count,0);assert.equal(p.staged_unapproved_count,0);assert.equal(p.consumed_count,1);
+});
+
+test('eligible items are filtered before pagination and stay inside their exact account/source snapshot',async()=>{
+ const {env,c,fixtures}=setup();fixtures.streamables=[fixtures.streamables[0],...Array.from({length:452},(_,i)=>['a','creator'+i,'staged',i%2?'no':'yes','https://test/'+i]),['other','creator','staged','yes','']];await c.f.sheetSync(env);
+ const p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables'&&x.account==='a'),seen=new Set();let offset=0,pages=0;
+ do{const page=await c.f.liveProducerItems(env,p.producer_id,{url:'https://test/?eligibility=ready&version='+p.version+'&offset='+offset});assert.equal(page.total,226);assert.equal(page.version,p.version);assert.equal(page.eligibility,'ready');for(const row of page.rows){assert.equal(row.ready,1);assert.equal(row.approved,'yes');assert.equal(row.origin,'streamables');assert.ok(!seen.has(row.item_id));seen.add(row.item_id);}offset=page.next_offset;pages++;}while(offset!==null);
+ assert.equal(pages,2);assert.equal(seen.size,226);assert.equal((await c.f.liveProducerItems(env,p.producer_id,{url:'https://test/?eligibility=not_supported'})).status,400);
+ assert.equal((await c.f.liveProducerItems(env,p.producer_id,{url:'https://test/?eligibility=ready&version=old'})).status,409);
+ const zero=(await c.f.liveProducerItems(env,p.producer_id,{url:'https://test/?eligibility=ready&offset=226'}));assert.equal(zero.rows.length,0);assert.equal(zero.next_offset,null);
+});
+
+test('legacy snapshots do not invent approval counts before collection upgrades the group payload',async()=>{
+ const {env,c,sql}=setup();await c.f.sheetSync(env);const p=(await c.f.liveProducerList(env)).rows.find(x=>x.source_tab==='streamables');
+ const record=sql.prepare('SELECT payload FROM sheet_live_producers WHERE producer_id=?').get(p.producer_id),payload=JSON.parse(record.payload);for(const key of Object.keys(payload))if(key==='approval_breakdown_version'||key.startsWith('staged_'))delete payload[key];
+ sql.prepare('UPDATE sheet_live_producers SET payload=? WHERE producer_id=?').run(JSON.stringify(payload),p.producer_id);
+ let legacy=(await c.f.liveProducerList(env)).rows.find(x=>x.producer_id===p.producer_id);assert.equal(legacy.staged_unapproved_count,undefined);assert.equal(legacy.ready_count,2);
+ await c.f.sheetSync(env);legacy=(await c.f.liveProducerList(env)).rows.find(x=>x.producer_id===p.producer_id);assert.equal(legacy.staged_unapproved_count,1);assert.equal(legacy.approval_breakdown_version,1);
 });

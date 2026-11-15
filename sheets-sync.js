@@ -61,7 +61,7 @@ async function makeStockGroups(env,tables,routes){
   }
   const status=producerStatusValue(r),creator=clean(producerText(r.creator_handle),150);
   if(creator&&!g.creators.includes(creator))g.creators.push(creator);
-  g.items.push({item_id:title+':'+row,source_row:row,item_label:'Row '+row,item_url:producerURL(producerText(r.yt_link)||producerText(r['public drive link'])),status:clean(status.value,60),approved:clean(producerText(r.approved),60),creator_handle:creator,status_conflict:status.conflict,ready:producerReady(r)?1:0,consumed:producerConsumed(r)?1:0,origin:title});
+  g.items.push({item_id:title+':'+row,source_row:row,item_label:'Row '+row,item_url:producerURL(producerText(r.yt_link)||producerText(r.url)||producerText(r['public drive link'])),status:clean(status.value,60),approved:clean(producerText(r.approved),60),creator_handle:creator,status_conflict:status.conflict,ready:producerReady(r)?1:0,consumed:producerConsumed(r)?1:0,origin:title});
  }
  return groups;
 }
@@ -93,7 +93,7 @@ async function sheetSync(env){
    const stable='sheets-v1',oldItems=tx.rows('sheet_live_items'),oldGroups=tx.rows('sheet_live_producers');
    const nextItems=[],nextGroups=[];
    for(const g of groups.values()){
-    const payload={...g,items:undefined,total_count:g.items.length,ready_count:g.items.reduce((n,i)=>n+i.ready,0),consumed_count:g.items.reduce((n,i)=>n+i.consumed,0),status_conflicts:g.items.filter(i=>i.status_conflict).length};
+    const payload={...g,items:undefined,...producerApprovalBreakdown(g.items),total_count:g.items.length,ready_count:g.items.reduce((n,i)=>n+i.ready,0),consumed_count:g.items.reduce((n,i)=>n+i.consumed,0),status_conflicts:g.items.filter(i=>i.status_conflict).length};
     nextGroups.push({version:stable,producer_id:g.producer_id,payload:JSON.stringify(payload),fetched_at:fetched});
     for(const item of g.items)nextItems.push({version:stable,producer_id:g.producer_id,item_id:item.item_id,payload:JSON.stringify(item)});
    }
@@ -124,9 +124,11 @@ async function liveProducerItems(env,id,request){
  const record=await env.STORE.find('sheet_live_producers',{version,producer_id:id});
  if(!record||JSON.parse(record.payload).policy_version!==2)return error('snapshot_expired',409);
  const offset=Number(u.searchParams.get('offset')||0),limit=200;if(!Number.isSafeInteger(offset)||offset<0||offset>100000)return error('Invalid offset',400);
- const data=storeSort((await env.STORE.rows('sheet_live_items')).filter(r=>r.version===version&&r.producer_id===id),'item_id').slice(offset,offset+limit+1);
+ const eligibility=u.searchParams.get('eligibility')||'all';if(!['all','ready'].includes(eligibility))return error('Invalid eligibility filter',400);
+ const rows=storeSort((await env.STORE.rows('sheet_live_items')).filter(r=>r.version===version&&r.producer_id===id),'item_id').map(x=>JSON.parse(x.payload)).filter(x=>eligibility==='all'||!x.status_conflict&&Number(x.ready)===1&&producerReady(x));
+ const data=rows.slice(offset,offset+limit+1);
  const after=await sheetStatus(env);if(after.last_success!==state.last_success)return error('snapshot_changed_retry',409);
- return json({rows:data.slice(0,limit).map(x=>JSON.parse(x.payload)),next_offset:data.length>limit?offset+limit:null,version:requested});
+ return json({rows:data.slice(0,limit),next_offset:data.length>limit?offset+limit:null,total:rows.length,eligibility,version:requested});
 }
 async function producerSources(env){
  const observations=new Map((await env.STORE.rows('content_collect_state')).filter(r=>r.id.startsWith('source:')).map(r=>{const o=JSON.parse(r.payload);return [o.source_id,{...o,stale:Date.now()-Date.parse(o.checked_at)>1800000}]}));

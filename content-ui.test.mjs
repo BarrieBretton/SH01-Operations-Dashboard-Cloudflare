@@ -10,12 +10,80 @@ function setup(){
  const get=id=>{if(!nodes.has(id))nodes.set(id,make());return nodes.get(id)};
  const context={console,Date,Intl,URL,URLSearchParams,Blob,AbortController,DOMException,setTimeout:()=>1,clearTimeout(){},setInterval(){},document:{getElementById:get,documentElement:{dataset:{}},addEventListener(){},createElement:make},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},localStorage:{getItem(){},setItem(){}},fetch:async(path,options)=>{requests.push({path,options});return {status:200,ok:true,json:async()=>({rows:[]})}}};
  vm.createContext(context);
- const inspect=`globalThis.inspectContent={beginDeskLoading,resetDeskLoading,deskRequestLoading,setDeskJobLoading,api,stopAutoPreviews,loadContentPreview,waitForPreviewMedia,contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
+ const inspect=`globalThis.inspectContent={setProducers:p=>{producerList=p},renderProducers,loadProducerEligibleItems,getProducerExpansions:()=>producerExpansions,approvalCount,beginDeskLoading,resetDeskLoading,deskRequestLoading,setDeskJobLoading,api,stopAutoPreviews,loadContentPreview,waitForPreviewMedia,contentScoreWeights,contentWeightedScore,contentRankValue,recordedScoreText,rememberConfirmedPlan,groupDecision,orderedGroupEntries,updateGroupPresentation,renderGroupOptions,gallerySummary,removalTiming,setActionFeedback,showError,loadFailures,selectContent,showItems,loadCleanup:loadContentCleanup,getGroups:()=>contentGroups,isCleanupFresh:()=>cleanupFresh,cancelCleanupRetry,loadProducers,renderContentGroup,contentError,showContentView,performContentPreview,previewResponse,setView:v=>{contentView=v},getGroupRows:()=>contentGroupRows,contentDate,relativeContentDate,contentGalleryCard,setContentInfo,plotSeries:contentPlotSeries,contentQuery,normalizeContentSeries,contentSvg,contentCsvCell,safeContentMedia,platformBadge,contentState,request:contentRequest,loadAvailability:loadContentAvailability,renderContent,previewContentPlan,confirmContentQueue,clearContentPlan,clearContentState,lock:()=>lock(),setToken:t=>{token=t},setRows:r=>{contentRows=r},setPlan:p=>{contentPlan=p},setGroups:g=>{contentGroups=g;cleanupFresh=true},getPlan:()=>contentPlan,getSelection:()=>contentSelection,setSelection:r=>{contentSelection.set(contentKey(r),r)},setSource:s=>{sourceReport=s},renderSchedule:renderProducerSchedule};`;
  vm.runInContext(source.replace('// END PRODUCER UI LOGIC',inspect+'\n// END PRODUCER UI LOGIC'),context);
  get('content-metric').value='views';get('content-layout').value='cards';get('content-keep-metric').value='weighted_score';get('content-weight-views').value='1';get('content-weight-likes').value='10';
  return {context,get,requests,api:context.inspectContent};
 }
 const post={platform:'instagram',account_id:'acct',account_handle:'handle',post_id:'post1',published_at:'2026-10-01T12:00:00Z',metrics:{views:100,likes:1,comments:null,shares:0},caption:'caption',permalink:'https://www.instagram.com/p/example/'};
+const stockPool=(id,count,extra={})=>({producer_id:id,name:id,account:id,source_tab:'shorts',version:'snapshot-1',ready_count:count,total_count:count+6,consumed_count:0,measurement:'measured',threshold:3,updated_at:new Date().toISOString(),approval_breakdown_version:1,staged_unapproved_count:6,staged_approval_no_count:3,staged_approval_blank_count:2,staged_approval_other_count:1,...extra});
+const eligibleRows=(count,start=0)=>Array.from({length:count},(_,i)=>({item_id:'row-'+(start+i),source_row:start+i+2,origin:'shorts',creator_handle:'creator',item_url:'https://www.youtube.com/shorts/abc'+i,status:'staged',approved:'yes',ready:1}));
+const itemResponse=(count,rows,next=null,version='snapshot-1')=>({status:200,ok:true,json:async()=>({version,eligibility:'ready',total:count,rows,next_offset:next})});
+
+test('approval KPIs distinguish measured counts from unknown legacy snapshots; only eligible pools expand',async()=>{
+ const {api,get,requests}=setup();api.setToken('private');
+ api.setProducers([stockPool('review',0),stockPool('ready',21),stockPool('legacy',null,{approval_breakdown_version:undefined})]);api.renderProducers();
+ assert.match(get('producer-stats').innerHTML,/Staged · awaiting approval<strong>Unknown/);
+ assert.match(get('producer-approval-summary').textContent,/12 awaiting approval counted so far; 1 pools need/);
+ assert.match(get('producers').innerHTML,/3 no · 2 blank · 1 other approval value/);
+ assert.doesNotMatch(get('producers').innerHTML,/data-producer-toggle="(?:review|legacy)"/);
+ await api.showItems('review');await api.showItems('legacy');assert.equal(requests.length,0);
+ get('producer-status').value='awaiting';api.renderProducers();assert.doesNotMatch(get('producers').innerHTML,/<strong>legacy<\/strong>/);
+ api.setProducers([stockPool('ready',21)]);api.renderProducers();assert.match(get('producer-stats').innerHTML,/Staged · awaiting approval<strong>6/);
+});
+
+test('inline eligible rows show a local spinner, all 21 items, and reuse the same snapshot on reopen',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setProducers([stockPool('pool',21)]);let finish,calls=0;
+ context.fetch=(path)=>{calls++;const q=new URL(path,'https://example.test').searchParams;assert.equal(q.get('eligibility'),'ready');assert.equal(q.get('version'),'snapshot-1');return new Promise(resolve=>{finish=resolve});};
+ const loading=api.showItems('pool');assert.match(get('producers').innerHTML,/Loading eligible items/);assert.match(get('producers').innerHTML,/aria-busy="true"/);
+ const rows=eligibleRows(21);rows[0].creator_handle='<script>bad</script>';rows[0].item_url='javascript:bad';
+ finish(itemResponse(21,rows));await loading;
+ assert.equal(api.getProducerExpansions().get('pool').rows.length,21);assert.match(get('producers').innerHTML,/All 21 eligible items/);assert.match(get('producers').innerHTML,/&lt;script&gt;/);assert.doesNotMatch(get('producers').innerHTML,/href="javascript:|Loading eligible items/);
+ await api.showItems('pool');assert.match(get('producers').innerHTML,/aria-expanded="false"/);
+ await api.showItems('pool');assert.equal(calls,1);assert.match(get('producers').innerHTML,/aria-expanded="true"/);
+});
+
+test('eligible pagination keeps prior rows on a local failure and does not affect another account',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setProducers([stockPool('large',201),stockPool('small',1)]);let second=false,fail=true;
+ context.fetch=async(path)=>{if(path.includes('/small/'))return itemResponse(1,eligibleRows(1));const q=new URL(path,'https://example.test').searchParams;if(q.get('offset')==='0')return itemResponse(201,eligibleRows(200),200);second=true;return fail?{status:503,ok:false,json:async()=>({error:'store_rate_limited'})}:itemResponse(201,eligibleRows(1,200));};
+ await api.showItems('large');await api.showItems('small');assert.equal(api.getProducerExpansions().get('large').rows.length,200);
+ await api.loadProducerEligibleItems('large');assert.equal(second,true);assert.match(get('producers').innerHTML,/Retry eligible items/);assert.match(get('producers').innerHTML,/store_rate_limited/);
+ assert.equal(api.getProducerExpansions().get('small').rows.length,1);assert.equal(api.getProducerExpansions().get('large').rows.length,200);assert.equal(get('global-notice').textContent,'');
+ fail=false;await api.loadProducerEligibleItems('large');assert.equal(api.getProducerExpansions().get('large').rows.length,201);assert.match(get('producers').innerHTML,/All 201 eligible items/);assert.doesNotMatch(get('producers').innerHTML,/store_rate_limited/);
+});
+
+test('snapshot changes invalidate expanded items without automatic reads; zero eligibility retracts the hierarchy',async()=>{
+ const {api,context,get}=setup();api.setToken('private');let calls=0;
+ context.fetch=async()=>{calls++;return itemResponse(1,eligibleRows(1));};
+ api.setProducers([stockPool('pool',1)]);await api.showItems('pool');
+ api.setProducers([stockPool('pool',1)]);api.renderProducers();assert.equal(api.getProducerExpansions().get('pool').rows.length,1);
+ api.setProducers([stockPool('pool',1,{version:'snapshot-2'})]);api.renderProducers();assert.equal(calls,1);assert.equal(api.getProducerExpansions().get('pool').rows.length,0);assert.match(get('producers').innerHTML,/source snapshot changed/);
+ api.setProducers([stockPool('pool',0,{version:'snapshot-3'})]);api.renderProducers();assert.equal(api.getProducerExpansions().size,0);assert.doesNotMatch(get('producers').innerHTML,/data-producer-toggle|producer-children/);
+});
+
+test('collapse/reopen and locking ignore obsolete item responses and cannot clear newer loading',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setProducers([stockPool('pool',1)]);const pending=[];
+ context.fetch=(_,options)=>new Promise(resolve=>pending.push({resolve,signal:options.signal}));
+ const old=api.showItems('pool');await api.showItems('pool');assert.equal(pending[0].signal.aborted,true);
+ const current=api.showItems('pool');pending[0].resolve(itemResponse(1,eligibleRows(1)));await old;
+ assert.match(get('producers').innerHTML,/Loading eligible items/);assert.equal(api.getProducerExpansions().get('pool').rows.length,0);
+ api.lock();api.setToken('replacement');pending[1].resolve(itemResponse(1,eligibleRows(1)));await current;
+ assert.equal(api.getProducerExpansions().size,0);assert.equal(get('producers').innerHTML,'');
+});
+
+test('eligible hierarchy rejects unexpected ineligible rows instead of displaying them',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setProducers([stockPool('pool',1)]);
+ context.fetch=async()=>itemResponse(1,[{...eligibleRows(1)[0],approved:'no'}]);await api.showItems('pool');
+ assert.equal(api.getProducerExpansions().get('pool').rows.length,0);assert.match(get('producers').innerHTML,/Unexpected item eligibility/);
+});
+
+test('eligible item timeout ends its spinner and offers a local retry',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setProducers([stockPool('pool',1)]);let timeout;
+ context.setTimeout=(fn,ms)=>{if(ms===25000)timeout=fn;return 1;};
+ context.fetch=(_,options)=>new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))));
+ const work=api.showItems('pool');timeout();await work;
+ assert.match(get('producers').innerHTML,/timed out/);assert.match(get('producers').innerHTML,/Retry eligible items/);assert.doesNotMatch(get('producers').innerHTML,/is-loading/);
+});
 test('intervals use consecutive valid observations, preserve unknowns and flag corrections',()=>{const {api}=setup();const rows=api.normalizeContentSeries([{observed_at:'2026-11-03T00:00:00Z',value:90},{observed_at:'2026-11-01T00:00:00Z',value:100},{observed_at:'2026-11-02T00:00:00Z',value:null},{observed_at:'bad',value:3},{observed_at:'2026-11-04T00:00:00Z',value:95},{observed_at:'2026-11-04T00:00:00Z',value:97},{observed_at:'2026-11-05T00:00:00Z',value:'102'}]);assert.equal(rows.length,3);assert.equal(rows[0].delta,null);assert.equal(rows[1].delta,-10);assert.equal(rows[1].interval_ms,172800000);assert.equal(rows[1].interpretation,'Correction / reset');assert.equal(rows[2].delta,7);assert.equal(rows[2].value,97)});
 test('charts escape titles and distinguish interval corrections from missing history',()=>{const {api}=setup();const series=[{post:{post_id:'<script>alert(1)</script>'},rows:api.normalizeContentSeries([{observed_at:'2026-11-01',value:100},{observed_at:'2026-11-02',value:90}])}];const svg=api.contentSvg(series,'views','interval');assert.ok(!svg.includes('<script>'));assert.ok(svg.includes('&lt;script&gt;'));assert.ok(svg.includes('correction / reset'));assert.ok(svg.includes('#b02e40'));assert.equal(api.contentSvg([{post,rows:series[0].rows.slice(0,1)}],'views','interval'),'');assert.ok(!svg.includes('NaN'));assert.ok(!svg.includes('Infinity'))});
 test('preview URLs are HTTPS official CDN hosts without access credentials',()=>{const {api}=setup();for(const url of ['javascript:alert(1)','https://fbcdn.net.attacker.example/p.jpg','https://attackerfbcdn.net/p.jpg','https://user:pass@x.fbcdn.net/p.jpg','https://x.fbcdn.net/p.jpg?access_token=secret','https://x.fbcdn.net:8443/p.jpg','http://x.fbcdn.net/a.jpg'])assert.equal(api.safeContentMedia(url),'',url);assert.equal(api.safeContentMedia('https://scontent.xx.fbcdn.net/p.jpg?oe=abc'),'https://scontent.xx.fbcdn.net/p.jpg?oe=abc')});
@@ -146,8 +214,8 @@ test('failure filters, source sync and producer items use their own feedback rat
  const {api,context,get}=setup();api.setToken('private');get('from').value='2026-12-01';get('to').value='2026-11-01';await get('refresh-failures').onclick();assert.match(get('failure-error').textContent,/on or before/);assert.equal(get('global-notice').textContent,'');
  get('from').value='';await get('refresh-failures').onclick();assert.equal(get('failure-error').textContent,'');
  context.fetch=async()=>({status:503,ok:false,json:async()=>({error:'store_rate_limited'})});await get('sheet-sync-now').onclick();assert.match(get('producer-sync-error').textContent,/503/);assert.equal(get('producer-error').textContent,'');
- api.showError(Object.assign(Error('Items failed'),{dashboardScope:'producer-view',feedbackTarget:'producer-items-error'}));assert.equal(get('producer-items-error').textContent,'Items failed');assert.equal(get('global-notice').textContent,'');
- api.lock();assert.equal(get('producer-sync-error').textContent,'');assert.equal(get('producer-items-error').textContent,'');
+ api.setProducers([{producer_id:'p',name:'Pool',source_tab:'streamables',ready_count:1,version:'v1'}]);await api.showItems('p');assert.match(get('producers').innerHTML,/Request failed \(HTTP 503\)/);assert.equal(get('global-notice').textContent,'');
+ api.lock();assert.equal(get('producer-sync-error').textContent,'');assert.equal(get('producers').innerHTML,'');assert.equal(api.getProducerExpansions().size,0);
 });
 
 test('feedback opens its containing disclosure and comparison actions appear only for a selection',()=>{
@@ -233,7 +301,6 @@ test('every dashboard data route maps to a rendered local loading indicator',()=
  const cases=[
   ['/api/failures','failure-loading'],['/api/failures?offset=100','failure-more-loading'],
   ['/api/producers','producer-loading'],['/api/producer-sources','producer-sources-loading'],
-  ['/api/producers/1/items?offset=0','producer-items-loading'],['/api/producers/1/items?offset=100','producer-items-more-loading'],
   ['/api/sheets/sync','producer-sync-loading',{}],['/api/content?limit=50','content-library-loading'],['/api/content?offset=50','content-more-loading'],
   ['/api/content/series?post_id=a','content-compare-loading'],['/api/content/groups','content-groups-loading'],
   ['/api/content/plan','content-plan-loading',{}],['/api/content/queue','content-queue-loading'],['/api/content/queue','content-confirm-loading',{}],
