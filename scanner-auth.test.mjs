@@ -10,7 +10,7 @@ test('media credential grants only the three scanner operations', async () => {
   assert.equal((await call(path,method)).status,503);
   assert.equal((await call(path,method,'wrong')).status,401);
  }
- for(const [path,method] of [['/api/ingest/event','POST'],['/api/ingest/deletion-result','POST'],['/api/ingest/resolve-post','POST'],['/api/ingest/posts','GET'],['/api/storage/setup','POST'],['/api/content','GET']]){
+ for(const [path,method] of [['/api/ingest/event','POST'],['/api/ingest/deletion-result','POST'],['/api/ingest/resolve-post','POST'],['/api/ingest/posts','GET'],['/api/storage/setup','POST'],['/api/content','GET'],['/api/content/scan','POST']]){
   assert.equal((await call(path,method)).status,401);
  }
  assert.equal((await call('/api/ingest/event','POST','ingest-test')).status,503);

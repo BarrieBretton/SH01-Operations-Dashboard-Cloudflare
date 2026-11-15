@@ -23,12 +23,17 @@ async function scannerAccounts(env){
  for(const row of tables.content_posts){if(!['facebook','instagram'].includes(row.platform)||row.delete_status!=='published')continue;const k=row.platform+':'+row.account_id;const a=out.get(k)||{platform:row.platform,account_id:row.account_id,handle:row.account_handle||row.account_id,stored_posts:0};a.stored_posts++;out.set(k,a);}
  return {rows:[...out.values()].sort((a,b)=>(a.platform+':'+a.account_id).localeCompare(b.platform+':'+b.account_id)),source:'dashboard_catalogue',coverage:{full_history_verified:false,scope:'Stored accounts and published posts; collection coverage is owned by the dashboard'}};
 }
+function scannerStoredMedia(row){
+ const kind=scannerKind(row),url=contentPreview(row.preview_url);
+ if(row.media_type==='POST'||!url||!((kind==='IMAGE'&&row.preview_type==='image')||(kind==='VIDEO'&&row.preview_type==='video')))return null;
+ return {available:true,url,kind:row.preview_type,media_type:kind,source:'stored'};
+}
 async function scannerPosts(env,u){
  const platform=contentPlatform(u.searchParams.get('platform')),account=contentID(u.searchParams.get('account_id'));
  const after=u.searchParams.get('after')||'';if(after)contentID(after);
  const selection=u.searchParams.has('post_ids')?u.searchParams.get('post_ids').split(','):null;if(selection&&(after||!selection.length||selection.length>20||new Set(selection).size!==selection.length||selection.some(id=>!id||contentID(id)!==id)))throw Error('invalid_targeted_posts');
  const rows=(await scannerSnapshot(env)).content_posts.filter(r=>r.platform===platform&&r.account_id===account&&r.delete_status==='published'&&(!selection||selection.includes(r.post_id))&&(!after||r.post_id>after)).sort((a,b)=>a.post_id<b.post_id?-1:a.post_id>b.post_id?1:0);
- const selected=rows.slice(0,20).map(r=>({platform:r.platform,account_id:r.account_id,post_id:r.post_id,media_type:r.media_type,scan_kind:scannerKind(r),permalink:r.permalink,account_handle:r.account_handle,published_at:r.published_at,caption:r.caption,workflow_id:r.workflow_id,workflow_url:r.workflow_url}));
+ const selected=rows.slice(0,20).map(r=>({platform:r.platform,account_id:r.account_id,post_id:r.post_id,media_type:r.media_type,scan_kind:scannerKind(r),permalink:r.permalink,account_handle:r.account_handle,published_at:r.published_at,caption:r.caption,workflow_id:r.workflow_id,workflow_url:r.workflow_url,...(selection&&scannerStoredMedia(r)?{stored_media:scannerStoredMedia(r)}:{})}));
  return {rows:selected,next_after:rows.length>20?selected.at(-1).post_id:null,source:'dashboard_catalogue',full_history_verified:false};
 }
 async function scannerFingerprints(env,rows){

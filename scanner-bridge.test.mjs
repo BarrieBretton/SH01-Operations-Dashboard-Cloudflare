@@ -75,3 +75,11 @@ test('failed snapshots are evicted and retried on next request',async()=>{
  await assert.rejects(h.c.scannerAccounts(h.env),/store_rate_limited/);
  await h.c.scannerAccounts(h.env);assert.equal(reads,2);
 });
+
+test('targeted catalogue supplies safe stored originals in one snapshot, never a video thumbnail',async()=>{
+ const h=harness([post(1,{preview_url:'https://a.cdninstagram.com/a.jpg',preview_type:'image'}),post(2,{media_type:'VIDEO',preview_type:'video',preview_url:'https://a.fbcdn.net/v.mp4'}),post(3,{media_type:'VIDEO',preview_type:'image',preview_url:'https://a.fbcdn.net/thumb.jpg'}),post(4,{preview_type:'image',preview_url:'https://evil.test/x'}),post(5,{preview_type:'image',preview_url:'https://a.fbcdn.net/x?access_token=secret'})]);
+ const result=await h.c.scannerPosts(h.env,new URL('https://dash/api?platform=instagram&account_id=1&post_ids=001,002,003,004,005'));
+ assert.equal(result.rows[0].stored_media.kind,'image');assert.equal(result.rows[1].stored_media.kind,'video');
+ for(const row of result.rows.slice(2))assert.equal(row.stored_media,undefined);
+ const legacy=await h.c.scannerPosts(h.env,new URL('https://dash/api?platform=instagram&account_id=1'));assert.ok(legacy.rows.every(r=>!r.stored_media));
+});

@@ -1,5 +1,6 @@
 // Durable, bounded similarity scanning on the existing Worker cron.
 // No local terminal, provider credentials on Render, or deletion execution.
+const AUTO_SCAN_BATCH_SIZE=8;
 const AUTO_SCAN_ID='similarity_scan',AUTO_SCAN_URL='https://sh01.vivojaymail.workers.dev/social/inventory/scan';
 function autoScanEnabled(env){return env.META_SYNC_ENABLED==='1'&&!!env.MEDIA_CLIP_API_KEY;}
 function autoScanState(rows){try{return JSON.parse(rows.find(r=>r.id===AUTO_SCAN_ID)?.payload||'{}');}catch{return {};}}
@@ -14,15 +15,51 @@ function autoScanFingerprint(row){try{
 function autoScanEligible(row){return ['facebook','instagram'].includes(row.platform)&&row.delete_status==='published'&&['IMAGE','VIDEO','REELS','POST'].includes(row.media_type);}
 function autoScanKey(row){return row.platform+':'+row.account_id;}
 function autoScanCoverage(rows){const out=new Map();for(const r of rows){if(!autoScanEligible(r))continue;const key=autoScanKey(r),a=out.get(key)||{platform:r.platform,account_id:r.account_id,eligible:0,fingerprinted:0,pending:0};a.eligible++;a[autoScanFingerprint(r)?'fingerprinted':'pending']++;out.set(key,a);}return [...out.values()];}
-function autoScanSummary(env,tables){const s=autoScanState(tables.content_collect_state),job=tables.content_jobs.find(r=>r.id===AUTO_SCAN_ID)||{};return {enabled:autoScanEnabled(env),status:job.lease_until>Date.now()?'running':job.status||'awaiting_first_tick',last_attempt:job.last_attempt||null,last_success:job.last_success||null,next_attempt:s.next_at||null,pending_batches:(s.batches||[]).length,last_result:s.last_result||null,scope:'Collected Facebook and Instagram images/videos; full provider history is not verified.'};}
+function autoScanSummary(env,tables){const s=autoScanState(tables.content_collect_state),job=tables.content_jobs.find(r=>r.id===AUTO_SCAN_ID)||{};return {enabled:autoScanEnabled(env),status:job.lease_until>Date.now()?'running':job.status||'awaiting_first_tick',last_attempt:job.last_attempt||null,last_success:job.last_success||null,next_attempt:s.next_at||null,pending_batches:(s.batches||[]).length,last_result:s.last_result||null,batch_size:AUTO_SCAN_BATCH_SIZE,priority:s.priority||null,scope:'Collected Facebook and Instagram images/videos; full provider history is not verified.'};}
+function autoScanAccountSummary(env,tables,platform,account){
+ const s=autoScanState(tables.content_collect_state),key=autoScanKey({platform,account_id:account}),batches=(s.batches||[]).filter(b=>autoScanKey(b)===key);
+ const result=s.account_results?.[key]||(s.last_result&&autoScanKey(s.last_result)===key?s.last_result:null);
+ return {enabled:autoScanEnabled(env),prioritized:!!s.priority&&autoScanKey(s.priority)===key,last_attempt:s.account_attempts?.[key]||null,last_result:result,pending_batches:batches.length,next_check:s.next_at||null,batch_size:AUTO_SCAN_BATCH_SIZE};
+}
+async function autoScanPrioritize(env,input){
+ if(!autoScanEnabled(env))throw Error('automatic_scanner_disabled');
+ const platform=contentPlatform(input.platform),account_id=contentID(input.account_id);
+ if(!['facebook','instagram'].includes(platform))throw Error('targeted_scan_platform_unsupported');
+ let answer;
+ await env.STORE.transact(['content_collect_state','content_posts','content_jobs'],tx=>{
+  const tables={content_collect_state:tx.rows('content_collect_state'),content_posts:tx.rows('content_posts'),content_jobs:tx.rows('content_jobs')};
+  const coverage=autoScanCoverage(tables.content_posts).find(c=>c.platform===platform&&c.account_id===account_id);
+  if(!coverage)throw Error('scanner_account_no_supported_posts');
+  const state=autoScanState(tables.content_collect_state),key=autoScanKey({platform,account_id}),retry=(state.batches||[]).some(b=>autoScanKey(b)===key);
+  if(coverage.pending||retry){
+   if(!state.priority||autoScanKey(state.priority)!==key){state.priority={platform,account_id,requested_at:contentNow()};state.priority_streak=0;}
+   const job=tables.content_jobs.find(j=>j.id===AUTO_SCAN_ID);
+   // Wake an idle scheduler only; active leases and service cooldowns remain intact.
+   if(job?.status==='idle'&&!(job.lease_until>Date.now())&&!state.batches?.length)state.next_at=contentNow();
+   tx.put('content_collect_state',{id:AUTO_SCAN_ID,payload:JSON.stringify(state)});
+  }
+  answer={status:coverage.pending||retry?'queued':'already_analyzed',coverage,scan_status:autoScanAccountSummary(env,tables,platform,account_id)};
+  // Transaction implementations may replace their row array on put.
+  answer.scan_status=autoScanAccountSummary(env,{...tables,content_collect_state:tx.rows('content_collect_state')},platform,account_id);
+ });
+ return answer;
+}
 function autoScanSelect(rows,state,now){
  const eligible=rows.filter(autoScanEligible),exists=(b,id)=>eligible.some(p=>p.platform===b.platform&&p.account_id===b.account_id&&p.post_id===id);
  state.batches=(state.batches||[]).map(b=>({...b,post_ids:b.post_ids.filter(id=>exists(b,id))})).filter(b=>b.post_ids.length);
  const candidates=state.batches.filter(b=>!(Date.parse(b.not_before)>now));
  if(state.batches.length<50){const byAccount=new Map();for(const r of eligible){if(autoScanFingerprint(r)||state.batches.some(b=>autoScanKey(b)===autoScanKey(r)&&b.post_ids.includes(r.post_id)))continue;const key=autoScanKey(r);if(!byAccount.has(key))byAccount.set(key,[]);byAccount.get(key).push(r);}
-  for(const values of byAccount.values()){values.sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||a.post_id.localeCompare(b.post_id));const r=values[0];candidates.push({platform:r.platform,account_id:r.account_id,post_ids:values.slice(0,2).map(x=>x.post_id),attempts:0});}
+  for(const values of byAccount.values()){values.sort((a,b)=>String(a.first_seen||'').localeCompare(String(b.first_seen||''))||a.post_id.localeCompare(b.post_id));const r=values[0];candidates.push({platform:r.platform,account_id:r.account_id,post_ids:values.slice(0,AUTO_SCAN_BATCH_SIZE).map(x=>x.post_id),attempts:0});}
  }
  candidates.sort((a,b)=>String(state.account_attempts?.[autoScanKey(a)]||'').localeCompare(String(state.account_attempts?.[autoScanKey(b)]||''))||autoScanKey(a).localeCompare(autoScanKey(b)));
+ if(state.priority){
+  const key=autoScanKey(state.priority),pending=eligible.some(r=>autoScanKey(r)===key&&!autoScanFingerprint(r))||state.batches.some(b=>autoScanKey(b)===key);
+  if(!pending){delete state.priority;state.priority_streak=0;}
+  else {const focused=candidates.find(b=>autoScanKey(b)===key),other=candidates.find(b=>autoScanKey(b)!==key);
+   if(focused&&((state.priority_streak||0)<3||!other))return focused;
+   if(other)return other;
+  }
+ }
  return candidates[0]||null;
 }
 function autoScanOutcome(response,data,batch){
@@ -43,6 +80,7 @@ async function autoScanTick(env){
   else{
    if(!state.batches.includes(batch))state.batches.push(batch);batch.not_before=new Date(now+600000).toISOString();batch.attempts=(batch.attempts||0)+1;
    state.account_attempts={...(state.account_attempts||{}),[autoScanKey(batch)]:state.checked_at};state.next_at=batch.not_before;
+   state.priority_streak=state.priority&&autoScanKey(batch)===autoScanKey(state.priority)?(state.priority_streak||0)+1:0;
    Object.assign(job,{status:'running',lease,lease_until:now+600000,last_attempt:state.checked_at,error_code:null});
   }
   tx.put('content_collect_state',{id:AUTO_SCAN_ID,payload:JSON.stringify(state)});
@@ -57,6 +95,8 @@ async function autoScanTick(env){
   const state=autoScanState(tx.rows('content_collect_state')),same=b=>autoScanKey(b)===autoScanKey(batch)&&JSON.stringify(b.post_ids)===JSON.stringify(batch.post_ids);
   if(outcome.ok)state.batches=(state.batches||[]).filter(b=>!same(b));else{const saved=state.batches.find(same);if(saved)saved.not_before=new Date(at+backoff*1000).toISOString();}
   state.last_result={platform:batch.platform,account_id:batch.account_id,checked_at:new Date(at).toISOString(),ok:outcome.ok,error:outcome.code,...outcome.counts,comparison_truncated:outcome.comparison_truncated||false,cache_truncated:outcome.cache_truncated||false};
+  state.account_results={...(state.account_results||{}),[autoScanKey(batch)]:state.last_result};
+  state.account_results=Object.fromEntries(Object.entries(state.account_results).sort((a,b)=>String(b[1].checked_at).localeCompare(String(a[1].checked_at))).slice(0,50));
   const globalDelay=['scanner_auth_failed','scanner_update_required','scanner_response_unconfirmed'].includes(outcome.code)?backoff:cooldown;
   state.next_at=new Date(at+globalDelay*1000).toISOString();Object.assign(job,{status:outcome.ok?'ok':'retry_scheduled',last_success:outcome.ok?new Date(at).toISOString():job.last_success,error_code:outcome.code,lease:null,lease_until:null});
   tx.put('content_collect_state',{id:AUTO_SCAN_ID,payload:JSON.stringify(state)});

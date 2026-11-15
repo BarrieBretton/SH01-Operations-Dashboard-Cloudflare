@@ -69,7 +69,7 @@ test('groups endpoint uses one consistent snapshot for all groups and preserves 
  for(let i=0;i<22;i++)await s.c.ingestGroups(s.env,[{group_id:'g'+i,platform:'instagram',account_id:'12345',media_type:'IMAGE',members:['1','2'],algorithm:'test',evidence:{fixture:i}}]);
  s.sql.prepare("DELETE FROM content_posts WHERE post_id='2'").run();
  const snapshot=s.env.STORE.snapshot.bind(s.env.STORE);let reads=0;
- s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets']);return snapshot(tables)};
+ s.env.STORE.snapshot=async tables=>{reads++;assert.deepEqual([...tables],['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state']);return snapshot(tables)};
  s.env.STORE.rows=()=>{throw Error('unexpected separate table read')};
  const r=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});
  assert.equal(reads,1);assert.equal(r.rows.length,20);assert.equal(r.limit,20);
@@ -173,4 +173,16 @@ test('subset display filtering never crosses platform, account or fingerprint al
  for(const extra of [{platform:'facebook'},{account_id:'2'},{media_type:'IMAGE'},{evidence:'{"method":"complete_link_candidate_cluster","version":2}'},{algorithm:'other'}]){
   s.ctx.groups=[base,{...base,...extra,group_id:'large',members:'["a","b","c"]'}];assert.equal(vm.runInContext('currentDuplicateGroups(groups).length',s.ctx),2);
  }
+});
+
+test('account priority endpoint persists through real store transactions without touching cleanup plans',async()=>{
+ const s=setup();await group(s);Object.assign(s.env,{META_SYNC_ENABLED:'1',MEDIA_CLIP_API_KEY:'private-test'});s.ctx.body=r=>r.json();
+ vm.runInContext(read('./scanner-automation.js'),s.ctx);
+ const before=s.sql.prepare('SELECT COUNT(*) n FROM content_sheet_outbox').get().n;
+ const req={url:'https://d.test/api/content/scan',method:'POST',json:async()=>({platform:'instagram',account_id:'12345'})};
+ const response=await s.c.contentApi(req,s.env,{});assert.equal(response.status,'queued');assert.equal(response.coverage.pending,4);assert.equal(response.scan_status.prioritized,true);
+ const payload=s.sql.prepare("SELECT payload FROM content_collect_state WHERE id='similarity_scan'").get().payload;
+ await s.c.contentApi(req,s.env,{});assert.equal(s.sql.prepare("SELECT payload FROM content_collect_state WHERE id='similarity_scan'").get().payload,payload);
+ const groups=await s.c.contentApi({url:'https://d.test/api/content/groups',method:'GET'},s.env,{});assert.equal(groups.rows[0].scan_status.prioritized,true);assert.equal(groups.rows[0].scan_status.last_result,null);assert.equal(groups.rows[0].scan_coverage.pending,4);
+ assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_deletion_queue').get().n,0);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_cleanup_plans').get().n,0);assert.equal(s.sql.prepare('SELECT COUNT(*) n FROM content_sheet_outbox').get().n,before);
 });

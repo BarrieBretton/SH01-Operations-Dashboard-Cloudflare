@@ -16,14 +16,14 @@ function setup(posts=[]){
  return {env,c,tables,requests,advance(ms=90000){now+=ms;},state:()=>JSON.parse(tables.content_collect_state.find(r=>r.id==='similarity_scan')?.payload||'{}'),job:()=>tables.content_jobs.find(r=>r.id==='similarity_scan')};
 }
 test('automatic scanner selects only missing supported media, resumes after restart and finds later posts',async()=>{
- const h=setup([post('1'),post('2'),post('3'),post('cached','a',{fingerprint:fp}),post('carousel','a',{media_type:'CAROUSEL_ALBUM'}),post('deleted','a',{delete_status:'deleted'}),post('foreign','a',{platform:'tumblr'})]);
- await h.c.autoScanTick(h.env);assert.deepEqual(h.requests[0].body.post_ids,['1','2']);assert.equal(h.requests[0].u,'https://sh01.vivojaymail.workers.dev/social/inventory/scan');assert.equal(h.requests[0].o.redirect,'manual');assert.equal(h.requests[0].body.max_posts,2);assert.equal(h.state().batches.length,0);
+ const h=setup([...Array.from({length:9},(_,i)=>post(String(i+1))),post('cached','a',{fingerprint:fp}),post('carousel','a',{media_type:'CAROUSEL_ALBUM'}),post('deleted','a',{delete_status:'deleted'}),post('foreign','a',{platform:'tumblr'})]);
+ await h.c.autoScanTick(h.env);assert.deepEqual(h.requests[0].body.post_ids,['1','2','3','4','5','6','7','8']);assert.equal(h.requests[0].u,'https://sh01.vivojaymail.workers.dev/social/inventory/scan');assert.equal(h.requests[0].o.redirect,'manual');assert.equal(h.requests[0].body.max_posts,8);assert.equal(h.state().batches.length,0);
  await h.c.autoScanTick(h.env);assert.equal(h.requests.length,1);h.advance();const restarted=vm.createContext({...h.c});vm.runInContext(read('./scanner-automation.js'),restarted);
- await restarted.autoScanTick(h.env);assert.deepEqual(h.requests[1].body.post_ids,['3']);h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests.length,2);assert.equal(h.job().status,'idle');
+ await restarted.autoScanTick(h.env);assert.deepEqual(h.requests[1].body.post_ids,['9']);h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests.length,2);assert.equal(h.job().status,'idle');
  h.tables.content_posts.push(post('new'));h.advance(301000);await h.c.autoScanTick(h.env);assert.deepEqual(h.requests[2].body.post_ids,['new']);
 });
 test('automatic batches rotate accounts and preserve same-platform account isolation',async()=>{
- const h=setup([post('1','a'),post('2','a'),post('3','a'),post('1','b')]);await h.c.autoScanTick(h.env);h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests[1].body.account_id,'b');h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests[2].body.account_id,'a');
+ const h=setup([...Array.from({length:9},(_,i)=>post(String(i),'a')),post('1','b')]);await h.c.autoScanTick(h.env);h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests[1].body.account_id,'b');h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests[2].body.account_id,'a');
 });
 test('lease prevents concurrent cron deliveries from dispatching duplicate scans',async()=>{
  const h=setup([post('1')]);let release;h.c.fetch=async()=>{h.requests.push(1);await new Promise(r=>release=r);return new Response('{}',{status:503});};const first=h.c.autoScanTick(h.env);while(!release)await new Promise(r=>setImmediate(r));await h.c.autoScanTick(h.env);assert.equal(h.requests.length,1);release();await first;
@@ -65,4 +65,43 @@ test('failed completion persistence leaves the durable batch leased until safe r
  h.env.STORE.transact=(names,fn)=>{if(++calls===2)throw Error('store_network_unavailable');return normal(names,fn);};
  await assert.rejects(h.c.autoScanTick(h.env),/store_network_unavailable/);assert.equal(h.requests.length,1);assert.equal(h.state().batches.length,1);assert.equal(h.job().status,'running');
  h.env.STORE.transact=normal;h.advance(300000);await h.c.autoScanTick(h.env);assert.equal(h.requests.length,1);h.advance(301000);await h.c.autoScanTick(h.env);assert.equal(h.requests.length,2);assert.equal(h.state().batches.length,0);
+});
+
+test('account catch-up survives restart, processes eight at a time and yields after three batches',async()=>{
+ const h=setup([...Array.from({length:42},(_,i)=>post(String(i).padStart(3,'0'),'focus')),...Array.from({length:20},(_,i)=>post('o'+i,'other'))]);
+ Object.assign(h.c,{contentPlatform:s=>s,contentID:s=>s,contentNow:()=>new Date(h.c.Date.now()).toISOString()});
+ const ack=await h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'focus'});
+ assert.equal(ack.coverage.pending,42);assert.equal(ack.scan_status.prioritized,true);
+ const restarted=vm.createContext({...h.c});vm.runInContext(read('./scanner-automation.js'),restarted);
+ for(let i=0;i<8;i++){await restarted.autoScanTick(h.env);h.advance();}
+ assert.deepEqual(h.requests.slice(0,4).map(r=>r.body.account_id),['focus','focus','focus','other']);
+ assert.ok(h.requests.every(r=>r.body.post_ids.length<=8));
+ assert.equal(h.c.autoScanCoverage(h.tables.content_posts).find(x=>x.account_id==='focus').pending,0);
+ assert.equal(h.c.autoScanCoverage(h.tables.content_posts).find(x=>x.account_id==='other').fingerprinted,16);
+ assert.equal(h.state().priority,undefined);
+ const status=h.c.autoScanAccountSummary(h.env,h.tables,'instagram','focus');
+ assert.equal(status.last_result.account_id,'focus');assert.equal(status.last_result.fingerprints_saved,2);
+});
+
+test('priority does not bypass cooldown or an existing lease, and repeated clicks are idempotent',async()=>{
+ const h=setup(Array.from({length:12},(_,i)=>post(String(i).padStart(3,'0'),'focus')));
+ Object.assign(h.c,{contentPlatform:s=>s,contentID:s=>s,contentNow:()=>new Date(h.c.Date.now()).toISOString()});
+ await h.c.autoScanTick(h.env);const until=h.state().next_at;
+ await h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'focus'});
+ h.state().priority_streak=2;
+ const stamp=h.state().priority.requested_at;
+ await h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'focus'});
+ assert.equal(h.state().priority.requested_at,stamp);assert.equal(h.state().next_at,until);
+ await h.c.autoScanTick(h.env);assert.equal(h.requests.length,1);
+ await assert.rejects(h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'missing'}),/no_supported_posts/);
+ h.env.META_SYNC_ENABLED='0';await assert.rejects(h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'focus'}),/disabled/);
+});
+
+test('a focused account with a deferred failure does not block other accounts or lose group retries',async()=>{
+ const h=setup([post('1','focus'),post('2','other')]);Object.assign(h.c,{contentPlatform:s=>s,contentID:s=>s,contentNow:()=>new Date(h.c.Date.now()).toISOString()});
+ await h.c.autoScanPrioritize(h.env,{platform:'instagram',account_id:'focus'});const normal=h.c.fetch;
+ h.c.fetch=async()=>{h.tables.content_posts[0].fingerprint=fp;return new Response(JSON.stringify({ok:false,errors:[{diagnostic:{dashboard_code:'store_rate_limited',retry_after_seconds:300}}]}));};
+ await h.c.autoScanTick(h.env);h.advance(320000);h.c.fetch=normal;
+ await h.c.autoScanTick(h.env);assert.equal(h.requests[0].body.account_id,'focus');
+ h.advance();await h.c.autoScanTick(h.env);assert.equal(h.requests[1].body.account_id,'other');assert.equal(h.state().batches.length,0);
 });

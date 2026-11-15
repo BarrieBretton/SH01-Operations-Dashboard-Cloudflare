@@ -398,3 +398,50 @@ sync. The fingerprint queue covers stored supported posts, not inaccessible or
 uncollected Instagram history.
 
 Final local validation: 204 dashboard JavaScript tests, 73 backend scanner/auth/retry/video tests and four dashboard Python completion tests passed. Built HTML validation passed with 176 unique IDs. A real browser/rendering session and live scheduled execution were not available in this development environment.
+
+## Account catch-up and scan throughput — 15 November 2026
+
+Operator-observed: automatic scanning is enabled and a batch for Erika Devereux
+succeeded, while Aand Cut still reported eight fingerprints out of 50 eligible
+stored posts, 42 pending, and incomplete provider history. This does not identify
+a live account-specific failure. Code inspection confirmed the two-post global
+batch limit and account rotation could make initial catch-up take hours.
+
+Automatic batches now contain up to eight posts in one platform/account. The
+existing 120-second default media budget, byte limits, ten-minute lease, failure
+replay, 75-second minimum cooldown with jitter and one scheduler job per invocation
+remain. Larger batches are a throughput improvement, not a completion-time promise.
+Partial saves remain replayable and cached fingerprints avoid repeat downloads.
+
+POST /api/content/scan, authenticated with the existing dashboard unlock token,
+requests durable catch-up priority for an account with eligible stored posts.
+It does not scan during the request, collect missing provider history, queue
+clickouts or delete posts. Repeated requests for the same account are idempotent.
+Priority survives browser closure and deployment restart, yields one ready batch
+to another account after three priority batches, and clears when no missing
+fingerprints or saved retry batches remain for that account. Existing cooldowns
+and leases cannot be bypassed. Requesting a different account replaces the focus.
+A failed account batch does not block eligible work on other accounts.
+
+The group gallery offers Prioritise this account next to its coverage, with local
+loading/error feedback. Group reads now include the selected account's last batch
+result and retry count from the same storage snapshot. The global last-success
+message must not be interpreted as that selected account's progress. No recurring
+browser polling was added. No new secret, environment variable or storage schema
+is required. The existing media credential cannot call this dashboard action.
+
+Targeted scanner catalogue responses can carry safe stored image/video originals
+from the existing snapshot. Video thumbnails and unclassified Facebook POST
+previews are excluded. The companion scanner reuses these descriptors instead
+of making a separate storage-backed media-resolution request for every post.
+Expired originals still receive at most one provider refresh after CDN 403/404.
+Provider credentials are never exposed; direct CDN downloads retain host, DNS,
+public-address, byte-budget and TLS validation.
+
+Local regression checks cover eight-item batching, durable priority, fair rotation,
+cooldown preservation, original URL reuse, expired URL refresh, auth scope,
+request payloads, loading states and locked-session races. Nineteen synthetic
+identical video fingerprints form one group across 8/8/3 batches. Actual all-19
+provider collection, live quota headroom and real-media matching remain unverified.
+
+Catch-up validation: 211 dashboard JavaScript tests, 61 backend scanner/auth/retry/video tests and four dashboard Python completion tests passed locally. Live all-19 matching is still an operator check.
