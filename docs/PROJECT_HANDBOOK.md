@@ -807,3 +807,7 @@ For an expanded group, new plans rank active posts (including prior keepers). Qu
 Local regression covers seven reviewed posts plus a 29-post scan sharing the prior keeper: 35 unique posts, seven reviewed, 28 new, six queued; a subsequent explicit plan handles 29 active posts without duplicating queue entries. Also covered: index/detail parity, unrelated reviews, no overlap-only merge, matching disjoint groups, scope/version isolation, video/blank guards, member/comparison limits and stale confirmation. No production mutation, scan, deployment or deletion was performed while preparing this patch. Exact production consolidation and real-browser appearance remain acceptance checks after deployment. No new environment variables or backend deployment are required.
 
 Validation for this update: 282 Node tests and four Python completion tests passed locally; generated dashboard and Worker rebuilt. Guarded installer validates the previously published 7cf778d source before changing any files.
+
+## Review defaults — 16 November 2026
+
+At the operator’s request, new page loads and cleared/locked sessions default to Keep highest score / metric and Number to keep 1. Users can still change both controls; ordinary group changes and preview cancellation retain their current choices. Weighted score remains Views × 1 + Likes × 10. Defaults alone perform no requests or queue action: Preview removal plan and exact typed confirmation remain required. This supersedes the former blank UI defaults; backend strategy/count validation remains explicit.
