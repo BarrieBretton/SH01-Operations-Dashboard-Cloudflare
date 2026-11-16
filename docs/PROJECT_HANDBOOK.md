@@ -815,3 +815,21 @@ At the operator’s request, new page loads and cleared/locked sessions default 
 ## Review colour contrast — 16 November 2026
 
 Removal preview borders, decision labels and legend markers now use bright red (#ff3333); keep markers use saturated green (#00e676). Light-theme equivalents use #d9001b and #007a35 for readable text. These review-only colour tokens retain the existing amber queued state and do not change review, ranking or queue behaviour. Generated dashboard and Worker rebuilt.
+
+
+## Infrastructure desk and manual B2 version management — 16 November 2026
+
+**Code-confirmed:** The companion ops_infrastructure.py adds separately authenticated
+/infra/desk (control key) and /ops/infra (media key) inventory/check routes.
+The desk Infrastructure tab discovers all registered slots and inventories runtime
+integrations. Capacity figures have explicit scopes and unknown quotas remain unknown.
+B2 manual listing/preview/delete is control-key-only, bounded, signed, confirmed and
+scoped to exact immutable versions; there is no automatic deletion retry or schedule.
+The dashboard Worker needs the existing CONTROL_PLANE_API_KEY and MEDIA_CLIP_API_KEY
+as server secrets, with optional OPS_INFRA_CONTROL_URL / OPS_INFRA_MEDIA_URL origins.
+Existing registry/provider secrets remain on the backend. Optional operator capacity
+budgets use OPS_INFRA_LIMITS_JSON; ImageKit usage can use OPS_IMAGEKIT_USAGE_KEY.
+**Unverified:** live deployment, credentials, actual provider grants, external account
+quotas, current traffic/standby mappings and production deletion outcomes. Offline
+tests do not establish these. Real browser rendering was unavailable in the test host.
+See [INFRA-DESK-SETUP.md](../INFRA-DESK-SETUP.md) for full configuration, coverage and acceptance.

@@ -1,0 +1,18 @@
+<section id="infra-view" class="card hidden" aria-labelledby="infra-heading">
+ <div class="eyebrow">Infrastructure / entire backend</div><h2 id="infra-heading">Infrastructure</h2>
+ <p>Registered services, storage and backend integrations. Checks are read-only. “Unchecked” and “Not configured” do not mean healthy. Usage is measured where available; missing provider quotas stay unknown.</p>
+ <div class="control"><button class="btn" id="infra-refresh">Refresh infrastructure</button><span id="infra-progress" role="status" aria-live="polite"></span></div>
+ <div id="infra-error" class="action-feedback" role="status"></div><p id="infra-coverage" class="sub"></p>
+ <div id="infra-summary" class="infra-summary"></div><div id="infra-cards" class="infra-grid"></div>
+ <section id="b2-manager" class="action-panel hidden" aria-labelledby="b2-heading">
+  <h3 id="b2-heading">Backblaze file manager</h3><p id="b2-scope"></p>
+  <p>Each row is one stored version. Deletion is permanent and may break published links or queued jobs. Deleting the current version can expose an older version. Hide markers and unfinished uploads are displayed but cannot be deleted here.</p>
+  <div class="control"><button class="btn" id="b2-reload">Refresh files</button><button class="btn" id="b2-more" disabled>Load next 500 versions</button><label>Find loaded files<input id="b2-search" type="search" placeholder="Filename contains…"></label><label>Sort loaded files<select id="b2-sort"><option value="size-desc">Size · largest first</option><option value="size-asc">Size · smallest first</option><option value="name">Filename · A–Z</option><option value="newest">Upload · newest first</option></select></label></div>
+  <div id="b2-usage"></div><p id="b2-progress" role="status" aria-live="polite"></p><div id="b2-error" class="action-feedback" role="status"></div>
+  <div class="control"><button class="btn" id="b2-clear">Clear selection</button><button class="btn" id="b2-review" disabled>Review deletion</button><span id="b2-selected"></span></div>
+  <div class="scroll"><table><thead><tr><th>Select</th><th>Filename / version ID</th><th>Size</th><th>Uploaded (UTC)</th><th>Type</th></tr></thead><tbody id="b2-rows"></tbody></table></div>
+  <button class="btn" id="b2-show-more" hidden>Show 100 more loaded rows</button>
+  <pre id="b2-results" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+ </section>
+ <dialog id="b2-confirm" aria-labelledby="b2-confirm-title"><h3 id="b2-confirm-title">Permanently delete these versions?</h3><p id="b2-confirm-summary"></p><ul id="b2-confirm-files"></ul><p>Only the listed versions will be removed. This cannot be undone. Existing links or consumers may depend on them.</p><label>Type the confirmation shown above<input id="b2-confirm-input" autocomplete="off"></label><div class="control"><button class="btn" id="b2-cancel">Cancel</button><button class="btn" id="b2-delete" disabled>Permanently delete</button></div></dialog>
+</section>
