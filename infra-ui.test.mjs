@@ -36,3 +36,18 @@ test('lock clears file data and confirmation and rejects delayed reads',async()=
  resolve(Response.json({rows:[{name:'late'}]}));await assert.rejects(promise,e=>e.name==='AbortError');
  assert.equal(h.run('b2Rows.length'),0);assert.equal(h.run('b2Plan'),null);assert.equal(h.get('b2-confirm-files').innerHTML,'');
 });
+test('empty inventory has no misleading zero-percent health ring',()=>{
+ const h=harness();h.run('renderInfra()');assert.match(h.get('infra-summary').innerHTML,/No inventory loaded/);assert.doesNotMatch(h.get('infra-summary').innerHTML,/infra-donut/);
+});
+test('storage grouping, filter and bucket identity govern management actions',()=>{
+ const h=harness();h.run("infraRows=[{id:'b2:a',name:'Bucket',bucket_id:'one',prefix:'',status:'healthy',scope:'control'},{id:'b2:@default',name:'Media',bucket_id:'two',prefix:'',status:'healthy',scope:'runtime'},{id:'telegram',name:'Bot',status:'unavailable',scope:'runtime'}];renderInfra()");
+ assert.match(h.get('infra-cards').innerHTML,/Storage & files/);assert.match(h.get('infra-cards').innerHTML,/data-b2-open="0"/);
+ assert.equal(h.run('infraManageIndex(infraRows[1],1)'),-1);
+ h.run("infraRows[1].bucket_id='one'");assert.equal(h.run('infraManageIndex(infraRows[1],1)'),0);
+ h.run("infraRows[1].prefix='private/'");assert.equal(h.run('infraManageIndex(infraRows[1],1)'),-1);
+ h.get('infra-filter').value='attention';h.run('renderInfra()');assert.match(h.get('infra-cards').innerHTML,/Bot/);assert.doesNotMatch(h.get('infra-cards').innerHTML,/data-b2-open/);
+});
+test('folder browsing filters loaded rows without clearing other selected files',()=>{
+ const h=harness();h.run("b2Rows=[{file_id:'a',name:'one/a.mp4',size:20,uploaded_at:0,action:'upload',ticket:'a'},{file_id:'b',name:'two/b.mp4',size:40,uploaded_at:0,action:'upload',ticket:'b'}];b2Selection.add('b');b2CanDelete=true");
+ h.get('b2-folder').value='one/';h.run('renderB2()');assert.match(h.get('b2-rows').innerHTML,/one\/a.mp4/);assert.doesNotMatch(h.get('b2-rows').innerHTML,/two\/b.mp4/);assert.equal(h.run("b2Selection.has('b')"),true);assert.match(h.get('b2-selected').textContent,/1 \/ 10/);
+});

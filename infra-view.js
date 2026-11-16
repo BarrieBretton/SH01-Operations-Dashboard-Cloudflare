@@ -17,11 +17,38 @@ async function infraRequest(scope,path,payload){
  finally{clearTimeout(timer);infraControllers.delete(c);}
 }
 function infraDonut(value,label){const p=Math.max(0,Math.min(100,Number(value)||0));return '<div class="infra-donut" style="--fill:'+p+'%" role="img" aria-label="'+esc(label)+'"><span>'+Math.round(Number(value)||0)+'%</span></div>';}
+function infraGroup(row){
+ if(/^(b2:|postgres:|social_db$|redis$|google$|imagekit$|cloudinary$)/.test(row.id))return 'storage';
+ if(/^(runtime$|render:|router:|queue$|sla$|cloudflare$)/.test(row.id))return 'compute';
+ return 'integrations';
+}
+function infraIcon(group){
+ const paths={storage:'M4 6c0-4 16-4 16 0s-16 4-16 0Zm0 0v12c0 4 16 4 16 0V6M4 12c0 4 16 4 16 0',compute:'M4 3h16v7H4zM4 14h16v7H4zM7 6h1m-1 11h1m4-11h5m-5 11h5',integrations:'M9 8V3m6 5V3M6 8h12v3a6 6 0 0 1-12 0Zm6 9v5'};
+ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+paths[group]+'"/></svg>';
+}
+function infraManageIndex(row,index){
+ if(!row.id.startsWith('b2:'))return -1;
+ if(row.scope==='control')return index;
+ return row.bucket_id?infraRows.findIndex(r=>r.scope==='control'&&r.id.startsWith('b2:')&&r.bucket_id===row.bucket_id&&r.prefix===row.prefix):-1;
+}
 function renderInfra(){
  const healthy=infraRows.filter(r=>r.status==='healthy').length,total=infraRows.length,unknown=infraRows.filter(r=>['unchecked','not_configured'].includes(r.status)).length;
- $('infra-summary').innerHTML=infraDonut(total?100*healthy/total:0,healthy+' of '+total+' components verified healthy')+'<div><strong>'+healthy+' / '+total+' verified healthy</strong><p>'+unknown+' unchecked or not configured · '+(total-healthy-unknown)+' need attention</p><small>Health coverage, not an uptime SLA. Checks cache for up to 60 seconds.</small></div>';
- $('infra-cards').innerHTML=infraRows.map((r,i)=>'<article class="infra-card"><h3>'+esc(r.name)+'</h3><span class="infra-state" data-state="'+esc(r.status)+'">'+esc(r.status.replaceAll('_',' '))+'</span><p>'+esc(r.note||'Awaiting read-only check.')+'</p><small>'+esc(r.scope)+' · '+(r.checked_at?esc(new Date(r.checked_at).toLocaleString()):'Not checked')+'</small>'+(r.metrics||[]).map(m=>{const valid=Number.isFinite(m.used),limit=Number.isFinite(m.limit)&&m.limit>0,p=limit&&valid?100*m.used/m.limit:null;return '<div class="infra-metric">'+(p===null?'':infraDonut(p,m.label+': '+Math.round(p)+'% used'))+'<div><strong>'+esc(m.label)+'</strong><div>'+esc(m.unit==='bytes'?infraBytes(m.used):String(m.used))+(limit?' / '+esc(m.unit==='bytes'?infraBytes(m.limit):String(m.limit)):' · limit unknown')+'</div><small>'+esc(m.source)+'</small></div></div>';}).join('')+'<p class="sub">'+esc(r.quota_note||'')+'</p>'+(r.scope==='control'&&r.id.startsWith('b2:')?'<button class="btn" data-b2-open="'+i+'">Manage files</button>':'')+'</article>').join('');
+ const attention=total-healthy-unknown;
+ $('infra-summary').innerHTML=total?[[total,'Components','neutral'],[healthy,'Checks passed','good'],[attention,'Need attention','bad'],[unknown,'Unchecked / unconfigured','neutral']].map(([n,label,tone])=>'<div class="infra-stat '+tone+'"><strong>'+n+'</strong><span>'+label+'</span></div>').join(''):'<div class="infra-empty"><strong>No inventory loaded</strong><p>Refresh checks to connect. If a source is unavailable, see its error below. No health percentage can be calculated yet.</p></div>';
+ const filter=$('infra-filter').value||'all';
+ const groups=[['storage','Storage & files','Bucket usage, databases and media storage'],['compute','Compute & routing','Serving instances, queues and infrastructure control'],['integrations','Connected services','Publishing, automation and external APIs']];
+ $('infra-cards').innerHTML=groups.map(([group,label,description])=>{
+  const rows=infraRows.map((r,i)=>({r,i})).filter(({r})=>infraGroup(r)===group&&(filter==='all'||filter==='storage'&&group==='storage'||filter==='attention'&&!['healthy','unchecked','not_configured'].includes(r.status)||filter==='unchecked'&&['unchecked','not_configured'].includes(r.status)));
+  if(!rows.length)return '';
+  return '<section class="infra-section"><div class="infra-section-title"><span class="infra-icon">'+infraIcon(group)+'</span><div><h3>'+label+' <small>'+rows.length+'</small></h3><p>'+description+'</p></div></div><div class="infra-grid">'+rows.map(({r,i})=>{
+   const b2=r.id.startsWith('b2:'),manage=infraManageIndex(r,i),usage=r.storage_usage;
+   const metrics=(r.metrics||[]).map(m=>{const valid=Number.isFinite(m.used),limit=Number.isFinite(m.limit)&&m.limit>0,p=limit&&valid?100*m.used/m.limit:null;
+    return '<div class="infra-metric">'+(p===null?'':infraDonut(p,m.label+': '+Math.round(p)+'% used'))+'<div><span>'+esc(m.label)+'</span><strong>'+esc(m.unit==='bytes'?infraBytes(m.used):String(m.used))+'</strong><small>'+(limit?'of '+esc(m.unit==='bytes'?infraBytes(m.limit):String(m.limit)):'limit unknown')+' · '+esc(m.source)+'</small></div></div>';}).join('');
+   return '<article class="infra-card" data-state="'+esc(r.status)+'"><div class="infra-card-top"><span class="infra-icon">'+infraIcon(group)+'</span><span class="infra-state" data-state="'+esc(r.status)+'">'+esc(r.status.replaceAll('_',' '))+'</span></div><h4>'+esc(r.name)+'</h4><span class="infra-scope">'+(r.scope==='control'?'Control plane':'Media instance')+'</span>'+metrics+(b2&&!metrics?'<div class="infra-metric"><div><span>Stored file versions</span><strong>Awaiting measurement</strong><small>Refresh checks to read bucket metadata.</small></div></div>':'')+(usage?'<p class="infra-scan">'+(usage.complete?'✓ Complete listing':'◷ Partial listing')+' · '+usage.versions+' uploaded versions · '+esc(usage.scope)+'</p>':'')+'<p>'+esc(r.note||'Awaiting read-only check.')+'</p>'+(manage>=0?'<button class="btn infra-primary" data-b2-open="'+manage+'">Browse files &amp; review deletion →</button>':b2?'<p class="infra-hint">File management requires a matching bucket and prefix on the control plane. Its storage card provides the browse button.</p>':'')+'<details class="infra-card-details"><summary>Details &amp; measurement scope</summary><p>'+esc(r.quota_note||'')+'</p><small>'+(r.checked_at?'Checked '+esc(new Date(r.checked_at).toLocaleString()):'Not checked')+'</small>'+(b2?'<p>Account caps and daily transactions are separate from these bucket bytes. <a href="https://www.backblaze.com/docs/cloud-storage-use-partner-api-reports" target="_blank" rel="noopener noreferrer">Backblaze usage reports ↗</a></p>':'')+'</details></article>';
+  }).join('')+'</div></section>';
+ }).join('')||(total?'<p class="infra-empty">No components match this filter.</p>':'');
 }
+$('infra-filter').onchange=renderInfra;
 async function loadInfra(){
  const run=++infraRun,epoch=authEpoch;$('infra-refresh').disabled=true;$('infra-error').textContent='';$('infra-progress').textContent='Loading infrastructure inventories…';infraRows=[];renderInfra();
  try{
@@ -33,14 +60,17 @@ async function loadInfra(){
   const queue=infraRows.filter(r=>r.can_probe);let completed=0;
   async function worker(){while(queue.length&&run===infraRun&&epoch===authEpoch){const item=queue.shift();try{const result=await infraRequest(item.scope,'/check?'+new URLSearchParams({component:item.id}));if(run!==infraRun||epoch!==authEpoch)return;Object.assign(item,result);}catch(e){if(run!==infraRun||epoch!==authEpoch)return;item.status='unavailable';item.note=e.message;}completed++;$('infra-progress').textContent='Checked '+completed+' components…';renderInfra();}}
   await Promise.all([worker(),worker(),worker()]);
-  if(run===infraRun&&epoch===authEpoch)$('infra-progress').textContent='Checks finished · '+new Date().toLocaleTimeString();
+  if(run===infraRun&&epoch===authEpoch)$('infra-progress').textContent=(results.every(r=>r.status==='rejected')?'Inventory unavailable':results.some(r=>r.status==='rejected')?'Checks finished · one inventory unavailable':'Checks finished')+' · '+new Date().toLocaleTimeString();
  }catch(e){if(epoch===authEpoch)infraError('infra-error',e);}
  finally{if(run===infraRun&&epoch===authEpoch)$('infra-refresh').disabled=false;}
 }
 function setB2Busy(busy){b2Busy=busy;for(const id of ['b2-reload','b2-more','b2-review','b2-clear'])$(id).disabled=busy;renderB2();}
 function renderB2(){
- const q=$('b2-search').value.toLowerCase(),sort=$('b2-sort').value;
- const rows=b2Rows.filter(r=>r.name.toLowerCase().includes(q)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
+ const q=$('b2-search').value.toLowerCase(),sort=$('b2-sort').value,folder=$('b2-folder').value||'';
+ const folders=new Set();for(const row of b2Rows){const parts=row.name.split('/');parts.pop();let path='';for(const part of parts){path+=part+'/';folders.add(path);}}
+ $('b2-folder').innerHTML='<option value="">All folders</option>'+Array.from(folders).sort().map(f=>'<option value="'+esc(f)+'" '+(f===folder?'selected':'')+'>'+esc(f)+'</option>').join('');
+ $('b2-folder').value=folder;
+ const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
  $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||!r.ticket||!b2CanDelete?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraBytes(r.size))+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td></tr>').join('');
  $('b2-show-more').hidden=rows.length<=b2Visible;
  $('b2-review').disabled=b2Busy||!b2CanDelete||!b2Selection.size;
@@ -60,9 +90,10 @@ async function loadB2(reset=false){
  }catch(e){if(epoch===authEpoch&&generation===b2Generation)infraError('b2-error',e);}
  finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
 }
-async function openB2(slot){if(b2Busy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}}
+async function openB2(slot){if(b2Busy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-folder').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}}
 $('infra-cards').addEventListener('click',e=>{const b=e.target.closest('[data-b2-open]');if(b)openB2(infraRows[Number(b.dataset.b2Open)].id.slice(3));});
 $('b2-rows').addEventListener('change',e=>{const id=e.target.dataset.b2Id;if(!id||b2Busy)return;if(e.target.checked){if(b2Selection.size>=10){e.target.checked=false;$('b2-error').textContent='Select at most 10 versions per confirmation.';return;}b2Selection.add(id);}else b2Selection.delete(id);b2Plan=null;renderB2();});
+$('b2-folder').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-search').oninput=()=>{b2Visible=100;renderB2();};$('b2-sort').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-show-more').onclick=()=>{b2Visible+=100;renderB2();};$('b2-reload').onclick=()=>loadB2(true);$('b2-more').onclick=()=>loadB2(false);$('b2-clear').onclick=()=>{b2Selection.clear();b2Plan=null;renderB2();};
 $('b2-review').onclick=async()=>{
@@ -87,4 +118,4 @@ const infraOldTab=tab;
 tab=function(which){$('infra-view').classList.toggle('hidden',which!=='infra');$('tab-infra').setAttribute('aria-selected',which==='infra');if(which==='infra'){banner();cancelCleanupRetry();stopAutoPreviews();for(const name of ['failures','producers','meta']){$('tab-'+name).setAttribute('aria-selected','false');$(name==='failures'?'failure-view':name==='producers'?'producer-view':'meta-view').classList.add('hidden');}if(!infraRows.length)loadInfra();}else infraOldTab(which);};
 $('tab-infra').onclick=()=>tab('infra');
 const infraOldLock=lock;
-lock=function(){infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};
+lock=function(){infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';$('b2-folder').innerHTML='<option value="">All folders</option>';$('b2-folder').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};
