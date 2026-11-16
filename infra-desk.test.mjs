@@ -13,7 +13,7 @@ test('bridge uses distinct keys, fixed routes and suppresses redirects',async()=
   await worker.fetch(req('/api/infra/control/inventory?url=https://evil.test'),env,{});
   await worker.fetch(req('/api/infra/runtime/inventory'),env,{});
   assert.equal(calls[0][0],'https://infra-control.vivojaymail.workers.dev/infra/desk/inventory');
-  assert.equal(calls[0][1].headers['X-API-KEY'],'control-fixture');assert.equal(calls[1][1].headers['X-API-KEY'],'media-fixture');assert.equal(calls[0][1].redirect,'error');
+  assert.equal(calls[0][1].headers['X-API-KEY'],'control-fixture');assert.equal(calls[1][1].headers['X-API-KEY'],'media-fixture');assert.equal(calls[0][1].redirect,'manual');
   for(const path of ['/api/infra/control/select/render','/api/infra/runtime/b2/delete','/api/infra/control/registry','/api/infra/evil/inventory'])assert.equal((await worker.fetch(req(path,'POST',{}),env,{})).status,404);
   assert.equal(calls.length,2);
  }finally{globalThis.fetch=old;}
@@ -41,5 +41,30 @@ test('bridge diagnoses failures without exposing URLs, credentials or raw except
    assert.ok(!JSON.stringify(data).includes('secret'));assert.ok(!JSON.stringify(data).includes('credential'));
   }
   assert.equal(calls,3);
+ }finally{globalThis.fetch=old;}
+});
+
+test('Cloudflare-compatible redirect mode works and never follows upstream redirects',async()=>{
+ const old=globalThis.fetch;let calls=0;
+ try{
+  globalThis.fetch=async(u,o)=>{
+   calls++;
+   if(o.redirect==='error')throw new TypeError('Unsupported redirect mode');
+   assert.equal(o.redirect,'manual');
+   return Response.json({rows:[],scope:'control_plane_registry'});
+  };
+  assert.equal((await worker.fetch(req('/api/infra/control/inventory'),env,{})).status,200);
+  for(const status of [301,302,303,307,308]){
+   calls=0;globalThis.fetch=async(u,o)=>{
+    calls++;assert.equal(o.redirect,'manual');
+    return new Response('redirect body',{status,headers:{Location:'https://other.test/secret-target'}});
+   };
+   for(const [path,method,payload] of [['/api/infra/control/inventory','GET',null],['/api/infra/control/b2/delete','POST',{slot:'b2-a',plan:'signed',confirmation:'DELETE 1'}]]){
+    const before=calls;
+    const r=await worker.fetch(req(path,method,payload),env,{});
+    assert.equal(r.status,502);assert.deepEqual(await r.json(),{error:'infra_upstream_redirect_rejected'});
+    assert.equal(calls,before+1);
+   }
+  }
  }finally{globalThis.fetch=old;}
 });

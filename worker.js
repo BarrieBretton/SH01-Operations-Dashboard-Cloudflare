@@ -1445,7 +1445,8 @@ async function infraDeskApi(req,env){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path==='/b2/delete'?65000:30000);
  try{
   const origin=infraBase(base);stage='fetch';
-  const r=await fetch(origin+(runtime?'/ops/infra':'/infra/desk')+path+(query.size?'?'+query:''),{method:req.method,headers:{'X-API-KEY':key,...(payload?{'Content-Type':'application/json'}:{})},...(payload?{body:JSON.stringify(payload)}:{}),redirect:'error',signal:controller.signal});
+  const r=await fetch(origin+(runtime?'/ops/infra':'/infra/desk')+path+(query.size?'?'+query:''),{method:req.method,headers:{'X-API-KEY':key,...(payload?{'Content-Type':'application/json'}:{})},...(payload?{body:JSON.stringify(payload)}:{}),redirect:'manual',signal:controller.signal});
+  if(r.status>=300&&r.status<400){try{await r.body?.cancel()}catch{}return error('infra_upstream_redirect_rejected',502);}
   if(!r.ok){let d;try{d=await r.json()}catch{}const code=typeof d?.detail==='string'&&/^[a-z][a-z0-9_]{2,100}$/.test(d.detail)?d.detail:'infra_upstream_http_'+r.status;return error(code,r.status===401||r.status===403?502:r.status);}
   stage='parse_response';return json(await r.json());
  }catch(e){
