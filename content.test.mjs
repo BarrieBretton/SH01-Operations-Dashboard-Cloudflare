@@ -368,3 +368,13 @@ test('consolidation cannot exceed 100 members and a missing post never becomes r
  const s=setup();s.ctx.groups=[reviewGroup('a',Array.from({length:100},(_,i)=>i+1)),reviewGroup('b',[100,101])].map(g=>({...g,members:JSON.stringify(g.members),evidence:JSON.stringify(g.evidence)}));s.ctx.posts=Array.from({length:101},(_,i)=>({...post(i+1),fingerprint:JSON.stringify(reviewFP())}));assert.equal(vm.runInContext('currentDuplicateGroups(groups,posts).length',s.ctx),2);
  const g={platform:'instagram',account_id:'12345',members:[post(1)],missing_members:['2']},plan={committed:1,plan_id:'p',payload:JSON.stringify({platform:'instagram',account_id:'12345',keep:['1'],remove:[]})};const result=s.c.groupReviewState(g,[plan],[]);assert.equal(result.review_coverage.total,2);assert.equal(result.review_coverage.reviewed,1);assert.equal(result.review_coverage.status,'partial');
 });
+
+test('lightweight index avoids preview decoration while exact group detail remains available',async()=>{
+ const s=setup();await s.c.upsertPosts(s.env,[post(1),post(2)]);
+ await s.c.ingestGroups(s.env,[{group_id:'light',platform:'instagram',account_id:'12345',media_type:'IMAGE',algorithm:'manual',members:['1','2'],evidence:{}}]);
+ let decorated=0;s.ctx.extrasDecorate=async(env,rows)=>{decorated+=rows.length;return rows};
+ const result=await s.c.contentApi({url:'https://d.test/api/content/groups?index_only=1',method:'GET'},s.env,{});
+ assert.equal(result.rows.length,0);assert.equal(result.index.length,1);assert.equal(result.index_complete,true);assert.equal(result.index[0].details_loaded,false);assert.equal(decorated,0);
+ const detail=await s.c.contentApi({url:'https://d.test/api/content/groups?group_id=light',method:'GET'},s.env,{});
+ assert.equal(detail.rows[0].members.length,2);assert.equal(decorated,2);
+});

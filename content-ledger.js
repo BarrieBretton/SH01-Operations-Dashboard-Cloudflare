@@ -399,14 +399,15 @@ async function contentApi(req,env,ctx) {
   const requested=u.searchParams.get('group_id');if(requested!==null)contentID(requested);
   const {tables}=await env.STORE.snapshot(['content_duplicate_groups','content_posts','content_cleanup_plans','content_deletion_queue','meta_assets','content_collect_state','meta_content','meta_capabilities']);
   const scanCoverage=typeof autoScanCoverage==='function'?autoScanCoverage(tables.content_posts):[],current=storeSort(currentDuplicateGroups(tables.content_duplicate_groups,tables.content_posts),'-updated_at','group_id');
-  const groups=requested!==null?current.filter(g=>g.group_id===requested):current.slice(0,20);
+  const indexOnly=requested===null&&u.searchParams.get('index_only')==='1';
+  const groups=requested!==null?current.filter(g=>g.group_id===requested):indexOnly?[]:current.slice(0,20);
   if(requested!==null&&!groups.length)throw Error('group_not_found_refresh_groups');
   const rows=groups.map(g=>groupReviewState(groupFromTables(groups,tables.content_posts,g.group_id),tables.content_cleanup_plans,tables.content_deletion_queue)).map(group=>{
    const name=contentAccountName(group,tables.meta_assets,tables.content_posts),scan_coverage=scanCoverage.find(a=>a.platform===group.platform&&a.account_id===group.account_id)||null;
    return {...group,...name,details_loaded:true,metric_refresh:contentMetricRefreshSummary(group,tables),member_count:group.members.length,scan_coverage,scan_status:typeof autoScanAccountSummary==='function'?autoScanAccountSummary(env,tables,group.platform,group.account_id):null,members:group.members.map(row=>({...row,...name,poster_url:contentPoster(row,tables.meta_content),metric_status:contentMetricEvidence(row,tables)}))};
   });
   if(typeof extrasDecorate==='function')for(const row of rows)row.members=await extrasDecorate(env,row.members||[]);
-  return json({rows,limit:requested!==null?1:20,total:current.length,...(requested===null?{index:duplicateGroupIndex(env,tables,current,scanCoverage),index_complete:true,scan_progress:contentScanProgress(tables,scanCoverage)}:{}),scope:'same_platform_and_account',removal_schedule:'not_reported'});
+  return json({rows,limit:requested!==null?1:indexOnly?0:20,total:current.length,...(requested===null?{index:duplicateGroupIndex(env,tables,current,scanCoverage),index_complete:true,scan_progress:contentScanProgress(tables,scanCoverage)}:{}),scope:'same_platform_and_account',removal_schedule:'not_reported'});
  }
  if(p==='/api/content'&&req.method==='GET'){const data=await contentList(env,u);if(typeof extrasDecorate==='function')data.rows=await extrasDecorate(env,data.rows);return json(data);}
  if(p==='/api/content/series'&&req.method==='GET'){

@@ -127,7 +127,7 @@ test('late request errors stay with their originating content tab and clear on s
 test('video preview resolves playback instead of using a stored thumbnail and creates player controls',async()=>{
  const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');api.setGroups([{group_id:'g',platform:'instagram',account_id:'acct',media_type:'VIDEO',members:[{...post,media_type:'REELS',preview_type:'image',preview_url:'https://a.cdninstagram.com/thumb.jpg'}]}]);get('content-group').value='0';api.renderContentGroup();
  let calls=0;context.fetch=async()=>{calls++;return {status:200,ok:true,json:async()=>({available:true,kind:'video',url:'https://a.cdninstagram.com/video.mp4'})}};
- const pending=api.performContentPreview('g0');for(let i=0;i<8;i++)await Promise.resolve();
+ const pending=api.performContentPreview('g0');await new Promise(resolve=>setImmediate(resolve));
  const video=get('content-preview-g0').children[0];assert.ok(video);assert.equal(video.controls,true);assert.equal(video.playsInline,true);assert.equal(video.preload,'none');assert.equal(calls,1);
  await pending;
 });
@@ -150,13 +150,13 @@ test('throttled group refresh retains selection and galleries, blocks plans, rec
  const cards=get('content-group-cards').innerHTML;let calls=0;
  const timers=new Map();let next=0;
  context.setTimeout=(fn,ms)=>{timers.set(++next,{fn,ms});return next};context.clearTimeout=id=>timers.delete(id);
- context.fetch=async path=>{calls++;return {status:path.endsWith('/groups')?503:200,ok:!path.endsWith('/groups'),headers:{get:()=> '120'},json:async()=>path.endsWith('/groups')?{error:'store_rate_limited'}:{rows:[]}}};
+ context.fetch=async path=>{calls++;return {status:path.split('?')[0].endsWith('/groups')?503:200,ok:!path.split('?')[0].endsWith('/groups'),headers:{get:()=> '120'},json:async()=>path.split('?')[0].endsWith('/groups')?{error:'store_rate_limited'}:{rows:[]}}};
  await api.loadCleanup();assert.equal(api.getGroups().length,1);assert.equal(get('content-group').value,'0');assert.equal(get('content-group-cards').innerHTML,cards);assert.equal(api.isCleanupFresh(),false);assert.equal(get('content-plan').disabled,true);
  await assert.rejects(api.previewContentPlan(),/Refresh groups and queue/);assert.equal(calls,2);
  const retry=[...timers.values()].find(t=>t.ms>=120000);assert.ok(retry);assert.ok(retry.ms<135001);
  await api.loadCleanup();assert.equal(calls,2,'manual clicks respect cooldown');
  context.Date=class extends Date{static now(){return Date.now()+140000}};
- context.fetch=async path=>{calls++;return {status:200,ok:true,json:async()=>({rows:path.endsWith('/groups')?[g]:[]})}};
+ context.fetch=async path=>{calls++;return {status:200,ok:true,json:async()=>({rows:path.split('?')[0].endsWith('/groups')?[g]:[]})}};
  await api.loadCleanup();assert.equal(api.isCleanupFresh(),true);assert.equal(get('content-group').value,'0');assert.equal(get('content-plan').disabled,false);assert.match(get('content-cleanup-notice').textContent,/Loaded 1/);assert.ok(![...timers.values()].some(t=>t.ms>=75000));
 });
 
@@ -473,7 +473,7 @@ test('neutral cards omit a removal badge while proposed and confirmed removals r
 
 test('failed refresh retains truthful coverage as delayed, recovery updates it, and lock clears all progress and picker content',async()=>{
  const {api,context,get}=setup();api.setToken('private');api.setView('cleanup');let fail=false,count=44;
- context.fetch=async path=>path==='/api/content/groups'&&fail?{status:503,ok:false,json:async()=>({error:'store_unavailable'})}:{status:200,ok:true,json:async()=>path==='/api/content/groups'?{rows:[],scan_progress:{checked_at:'2026-11-15T17:33:00Z',totals:{eligible:50,fingerprinted:count,pending:50-count,accounts:1,accounts_with_posts:1,accounts_fingerprinted:0},accounts:[]}}:{rows:[]}};
+ context.fetch=async path=>path.split('?')[0]==='/api/content/groups'&&fail?{status:503,ok:false,json:async()=>({error:'store_unavailable'})}:{status:200,ok:true,json:async()=>path.split('?')[0]==='/api/content/groups'?{rows:[],scan_progress:{checked_at:'2026-11-15T17:33:00Z',totals:{eligible:50,fingerprinted:count,pending:50-count,accounts:1,accounts_with_posts:1,accounts_fingerprinted:0},accounts:[]}}:{rows:[]}};
  await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/44 \/ 50/);fail=true;await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/44 \/ 50/);assert.match(get('content-scan-overall').innerHTML,/Update delayed/);
  fail=false;count=50;await api.loadCleanup();assert.match(get('content-scan-overall').innerHTML,/100<small>%/);assert.doesNotMatch(get('content-scan-overall').innerHTML,/Update delayed/);
  api.lock();for(const id of ['content-scan-overall','content-scan-selected','content-scan-accounts','content-group-options'])assert.equal(get(id).innerHTML,'');assert.equal(get('content-group-options').hidden,true);
@@ -591,4 +591,32 @@ test('a partial group previews only active posts and confirmation updates exact 
  const g={group_id:'g',platform:'instagram',account_id:'acct',members:rows};const related={...g,group_id:'other',members:[{...rows[2]},{...post,post_id:'4',cleanup_review:null}]};api.setGroups([g,related]);get('content-group').value='0';get('content-keep-count').value='1';get('content-keep-strategy').value='best';get('content-keep-metric').value='views';
  const plan={group_id:'g',plan_id:'p',keep:['3'],remove:[rows[1]],excluded_previously_queued:['1'],eligible_count:2,confirmation:'QUEUE 1 LINKS',expires_at:new Date(Date.now()+60000).toISOString()};context.fetch=async()=>({ok:true,status:200,json:async()=>plan});await api.previewContentPlan();assert.equal(api.getPlan().remove.length,1);assert.equal(rows[2].cleanup_review,null);
  api.rememberConfirmedPlan(plan,{status:'awaiting_sheet'});assert.equal(g.review_coverage.reviewed,3);assert.equal(related.review_coverage.reviewed,1);assert.equal(related.members[1].cleanup_review,null);assert.match(get('content-group-options').innerHTML,/1\/2 reviewed · 1 new/);api.clearContentState();
+});
+
+test('HTML group response preserves status and reference without leaking its body',async()=>{
+ const {api,context}=setup();api.setToken('private');let calls=0;
+ context.fetch=async()=>{calls++;return {status:502,ok:false,headers:{get:name=>name==='Content-Type'?'text/html':name==='CF-Ray'?'abc123-DEL':null},json:async()=>{throw Error('PRIVATE HTML')}}};
+ await assert.rejects(api.request('/api/content/groups?index_only=1'),e=>e.code==='content_response_not_json'&&e.httpStatus===502&&e.message.includes('abc123-DEL')&&!e.message.includes('PRIVATE')&&!e.message.includes('Unexpected token'));
+ assert.equal(calls,1);
+});
+test('queue mutation HTML reply stays unknown and is never automatically retried',async()=>{
+ const {api,context}=setup();api.setToken('private');let calls=0;
+ context.fetch=async()=>{calls++;return {status:200,ok:true,json:async()=>{throw new SyntaxError('Unexpected token < PRIVATE')}}};
+ await assert.rejects(api.request('/api/content/queue',{plan_id:'p',confirmation:'QUEUE 1 LINKS'}),e=>e.outcomeUnknown===true&&e.message.includes('Refresh the queue')&&!e.message.includes('PRIVATE'));
+ assert.equal(calls,1);
+});
+test('unexpected JSON scalar is rejected instead of treated as an empty successful inventory',async()=>{
+ const {api,context}=setup();api.setToken('private');context.fetch=async()=>({status:200,ok:true,json:async()=>null});
+ await assert.rejects(api.request('/api/content/groups?index_only=1'),e=>e.code==='content_response_not_json');
+});
+
+test('accepted queue write followed by an HTML refresh is not reported as an unverified submission',async()=>{
+ const {api,context,get}=setup();api.setToken('private');api.setPlan({plan_id:'p',keep:['p1'],remove:[{post_id:'p2'}],expires_at:new Date(Date.now()+60000).toISOString(),confirmation:'QUEUE 1 LINKS'});
+ let writes=0,reads=0;context.fetch=async(path,options)=>{
+  if(options.method==='POST'){writes++;return {status:200,ok:true,json:async()=>({ok:true})};}
+  reads++;return {status:502,ok:false,json:async()=>{throw SyntaxError('Unexpected token <')}};
+ };
+ get('content-confirm').value='QUEUE 1 LINKS';await assert.rejects(api.confirmContentQueue(),e=>e.code==='content_response_not_json');
+ assert.equal(writes,1);assert.equal(reads,1);assert.match(get('content-confirm-notice').textContent,/submission succeeded/);assert.equal(api.getPlan(),null);
+ await api.confirmContentQueue();assert.equal(writes,1);
 });
