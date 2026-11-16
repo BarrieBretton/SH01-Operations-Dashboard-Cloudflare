@@ -51,3 +51,20 @@ test('folder browsing filters loaded rows without clearing other selected files'
  const h=harness();h.run("b2Rows=[{file_id:'a',name:'one/a.mp4',size:20,uploaded_at:0,action:'upload',ticket:'a'},{file_id:'b',name:'two/b.mp4',size:40,uploaded_at:0,action:'upload',ticket:'b'}];b2Selection.add('b');b2CanDelete=true");
  h.get('b2-folder').value='one/';h.run('renderB2()');assert.match(h.get('b2-rows').innerHTML,/one\/a.mp4/);assert.doesNotMatch(h.get('b2-rows').innerHTML,/two\/b.mp4/);assert.equal(h.run("b2Selection.has('b')"),true);assert.match(h.get('b2-selected').textContent,/1 \/ 10/);
 });
+test('B2 shows decimal and binary units with exact bytes and scoped cap comparison',()=>{
+ const h=harness();const html=h.run("infraMetric({label:'Storage',used:9448928051,limit:null,unit:'bytes',source:'B2 metadata'},{id:'b2:@default',bucket:'sh0001',prefix:'',storage_usage:{complete:true,scope:'bucket'}})");
+ assert.match(html,/9\.45 GB/);assert.match(html,/8\.8 GiB/);assert.match(html,/9,448,928,051 bytes/);assert.match(html,/10 GB account cap reference/);assert.match(html,/infra-donut/);assert.match(html,/does not show account utilization/);assert.match(html,/16 Nov 2026/);
+});
+test('screenshot cap reference never applies to other buckets, partial scans or prefixes',()=>{
+ const h=harness();
+ for(const r of [{bucket:'other',prefix:'',storage_usage:{complete:true,scope:'bucket'}},{bucket:'sh0001',prefix:'',storage_usage:{complete:false,scope:'bucket'}},{bucket:'sh0001',prefix:'private/',storage_usage:{complete:true,scope:'prefix'}}]){
+  h.c.fixture={id:'b2:test',...r};const html=h.run("infraMetric({label:'Storage',used:1000,limit:null,unit:'bytes'},fixture)");assert.doesNotMatch(html,/infra-donut/);
+ }
+});
+test('configured operator budget takes precedence over screenshot reference',()=>{
+ const h=harness();const html=h.run("infraMetric({label:'Storage',used:1000000000,limit:5000000000,unit:'bytes'},{id:'b2:a',bucket:'sh0001',prefix:'',storage_usage:{complete:true,scope:'bucket'}})");assert.match(html,/5 GB operator budget/);assert.doesNotMatch(html,/10 GB/);
+});
+test('services have distinct representative icon geometry and use no external image requests',()=>{
+ const h=harness();const icons=['b2:a','redis','postgres:a','google','telegram','imagekit','runtime','render:a:sh01','n8n','queue','sla','youtube','meta','threads','tumblr','x','cloudflare','pulsetic','kite'].map(id=>h.run('infraServiceIcon({id:'+JSON.stringify(id)+'})'));
+ assert.equal(new Set(icons).size,icons.length);for(const html of icons){assert.match(html,/aria-hidden="true"/);assert.doesNotMatch(html,/<img|https:/);}
+});

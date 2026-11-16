@@ -26,6 +26,56 @@ function infraIcon(group){
  const paths={storage:'M4 6c0-4 16-4 16 0s-16 4-16 0Zm0 0v12c0 4 16 4 16 0V6M4 12c0 4 16 4 16 0',compute:'M4 3h16v7H4zM4 14h16v7H4zM7 6h1m-1 11h1m4-11h5m-5 11h5',integrations:'M9 8V3m6 5V3M6 8h12v3a6 6 0 0 1-12 0Zm6 9v5'};
  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+paths[group]+'"/></svg>';
 }
+function infraDecimalBytes(n){
+ if(!Number.isFinite(n))return 'Unknown';
+ const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1000&&i<4){n/=1000;i++;}
+ return n.toLocaleString(undefined,{maximumFractionDigits:2})+' '+units[i];
+}
+function infraServiceIcon(row){
+ const id=row.id.split(':')[0];
+ const paths={
+  b2:'M4 6h16l-2 15H6ZM3 6h18M8 3h8M8 11h8M9 15h6',
+  postgres:'M4 5c0-4 16-4 16 0s-16 4-16 0Zm0 0v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0',
+  redis:'m3 7 9-4 9 4-9 4Zm0 5 9 4 9-4M3 17l9 4 9-4',
+  google:'M5 2h10l4 4v16H5ZM15 2v5h4M8 11h8M8 15h8M8 19h8M11 11v8',
+  imagekit:'M3 4h18v16H3ZM3 17l6-7 5 5 3-3 4 5M16 8h1',
+  cloudinary:'M6 17a4 4 0 0 1-1-8 7 7 0 0 1 13-2 5 5 0 0 1 1 10M7 20l5-6 5 6',
+  telegram:'m2 10 20-8-5 20-6-7-5 3 1-6Zm5 2L22 2M11 15 22 2',
+  n8n:'M5 5v14M5 12h8l5-7M13 12l5 7M3 3h4v4H3ZM16 3h4v4h-4ZM16 17h4v4h-4ZM3 17h4v4H3Z',
+  kite:'M3 3v18h18M6 15l5-5 4 3 6-8M16 5h5v5',
+  youtube:'M2 5h20v14H2ZM10 8l6 4-6 4Z',
+  meta:'M2 16C2 3 7 3 12 12s10 9 10-1S17 1 12 12 2 23 2 16Z',
+  threads:'M19 5C9-4 1 5 4 16s20 7 17-3S8 4 9 12s9 4 7-5',
+  tumblr:'M9 3v14c0 5 6 5 9 3M5 8h12M12 3v14c0 2 3 2 5 1',
+  x:'M4 3h5l11 18h-5ZM20 3 4 21',
+  cloudflare:'M4 16a4 4 0 0 1 1-8 7 7 0 0 1 13 0 4 4 0 0 1 2 8ZM3 20h18',
+  router:'M9 3h6v6H9ZM3 16h6v6H3ZM15 16h6v6h-6ZM12 9v4M6 16v-3h12v3',
+  sla:'M12 3a9 9 0 1 0 .01 0M12 7v6l4 2',
+  queue:'M7 5h14M7 12h14M7 19h14M2 4h2v2H2ZM2 11h2v2H2ZM2 18h2v2H2Z',
+  runtime:'M6 6h12v12H6ZM9 9h6v6H9ZM9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4M18 9h4m-4 6h4',
+  render:'M3 3h18v7H3ZM3 14h18v7H3ZM7 6h1m-1 11h1M12 6h5m-5 11h5',
+  pulsetic:'M2 12h5l3-8 4 16 3-8h5'
+ };
+ const key=id==='social_db'?'postgres':id;
+ const color={b2:'#ffb099',postgres:'#90c9ff',redis:'#ff9aab',google:'#83e2ab',imagekit:'#c5b4ff',telegram:'#83d9ff',n8n:'#ffafc9',kite:'#ffd78b',youtube:'#ff9898',meta:'#9ab8ff',cloudflare:'#ffcb86',runtime:'#b7c4ff',sla:'#f4d38b'}[key]||'#9ed6cd';
+ return '<span class="infra-service-icon" style="--service-color:'+color+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+(paths[key]||'M5 5h14v14H5ZM9 9h6v6H9Z')+'"/></svg></span>';
+}
+// User-supplied account cap reference, NOT live provider telemetry or a per-bucket limit.
+// Applies only to the named bucket shown alongside the supplied account screenshot.
+const infraB2CapReferences={sh0001:{bytes:10000000000,observed:'16 Nov 2026'}};
+function infraB2Reference(row){return row.id.startsWith('b2:')?infraB2CapReferences[row.bucket]||null:null;}
+function infraMetric(m,row){
+ const b2=row.id.startsWith('b2:'),valid=Number.isFinite(m.used),reference=infraB2Reference(row);
+ const complete=!!row.storage_usage?.complete&&row.storage_usage.scope==='bucket'&&!row.prefix;
+ const operatorLimit=Number.isFinite(m.limit)&&m.limit>0;
+ const cap=operatorLimit?m.limit:b2&&complete&&reference?reference.bytes:null;
+ const p=valid&&cap?100*m.used/cap:null;
+ const fmt=b2?infraDecimalBytes:infraBytes;
+ const label=b2?(complete?'Bucket file-version storage':'Listed file-version storage · partial/prefix'):m.label;
+ const capLabel=operatorLimit?'operator budget':'account cap reference';
+ const value=m.unit==='bytes'?fmt(m.used):String(m.used);
+ return '<div class="infra-metric">'+(p===null?'':infraDonut(p,b2?'Bucket bytes equal '+p.toFixed(1)+'% of '+capLabel:m.label+': '+Math.round(p)+'% used'))+'<div><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong>'+(b2&&valid?'<small>'+esc(infraBytes(m.used))+' · '+esc(m.used.toLocaleString())+' bytes</small>':'')+'<small>'+(cap?'Compared with '+esc(m.unit==='bytes'?fmt(cap):String(cap))+' '+capLabel:'limit unknown')+' · '+esc(m.source)+'</small></div></div>'+(b2&&cap?'<p class="infra-cap-note">'+(operatorLimit?'Configured operator budget.':'Account cap reference from your '+esc(reference.observed)+' screenshot; not automatically refreshed.')+' This ring compares one bucket with that reference. It does not show account utilization or remaining upload allowance.</p>':'');
+}
 function infraManageIndex(row,index){
  if(!row.id.startsWith('b2:'))return -1;
  if(row.scope==='control')return index;
@@ -42,9 +92,8 @@ function renderInfra(){
   if(!rows.length)return '';
   return '<section class="infra-section"><div class="infra-section-title"><span class="infra-icon">'+infraIcon(group)+'</span><div><h3>'+label+' <small>'+rows.length+'</small></h3><p>'+description+'</p></div></div><div class="infra-grid">'+rows.map(({r,i})=>{
    const b2=r.id.startsWith('b2:'),manage=infraManageIndex(r,i),usage=r.storage_usage;
-   const metrics=(r.metrics||[]).map(m=>{const valid=Number.isFinite(m.used),limit=Number.isFinite(m.limit)&&m.limit>0,p=limit&&valid?100*m.used/m.limit:null;
-    return '<div class="infra-metric">'+(p===null?'':infraDonut(p,m.label+': '+Math.round(p)+'% used'))+'<div><span>'+esc(m.label)+'</span><strong>'+esc(m.unit==='bytes'?infraBytes(m.used):String(m.used))+'</strong><small>'+(limit?'of '+esc(m.unit==='bytes'?infraBytes(m.limit):String(m.limit)):'limit unknown')+' · '+esc(m.source)+'</small></div></div>';}).join('');
-   return '<article class="infra-card" data-state="'+esc(r.status)+'"><div class="infra-card-top"><span class="infra-icon">'+infraIcon(group)+'</span><span class="infra-state" data-state="'+esc(r.status)+'">'+esc(r.status.replaceAll('_',' '))+'</span></div><h4>'+esc(r.name)+'</h4><span class="infra-scope">'+(r.scope==='control'?'Control plane':'Media instance')+'</span>'+metrics+(b2&&!metrics?'<div class="infra-metric"><div><span>Stored file versions</span><strong>Awaiting measurement</strong><small>Refresh checks to read bucket metadata.</small></div></div>':'')+(usage?'<p class="infra-scan">'+(usage.complete?'✓ Complete listing':'◷ Partial listing')+' · '+usage.versions+' uploaded versions · '+esc(usage.scope)+'</p>':'')+'<p>'+esc(r.note||'Awaiting read-only check.')+'</p>'+(manage>=0?'<button class="btn infra-primary" data-b2-open="'+manage+'">Browse files &amp; review deletion →</button>':b2?'<p class="infra-hint">File management requires a matching bucket and prefix on the control plane. Its storage card provides the browse button.</p>':'')+'<details class="infra-card-details"><summary>Details &amp; measurement scope</summary><p>'+esc(r.quota_note||'')+'</p><small>'+(r.checked_at?'Checked '+esc(new Date(r.checked_at).toLocaleString()):'Not checked')+'</small>'+(b2?'<p>Account caps and daily transactions are separate from these bucket bytes. <a href="https://www.backblaze.com/docs/cloud-storage-use-partner-api-reports" target="_blank" rel="noopener noreferrer">Backblaze usage reports ↗</a></p>':'')+'</details></article>';
+   const metrics=(r.metrics||[]).map(m=>infraMetric(m,r)).join('');
+   return '<article class="infra-card" data-state="'+esc(r.status)+'"><div class="infra-card-top">'+infraServiceIcon(r)+'<span class="infra-state" data-state="'+esc(r.status)+'">'+esc(r.status.replaceAll('_',' '))+'</span></div><h4>'+esc(r.name)+'</h4><span class="infra-scope">'+(r.scope==='control'?'Control plane':'Media instance')+'</span>'+metrics+(b2&&!metrics?'<div class="infra-metric"><div><span>Stored file versions</span><strong>Awaiting measurement</strong><small>Refresh checks to read bucket metadata.</small></div></div>':'')+(usage?'<p class="infra-scan">'+(usage.complete?'✓ Complete listing':'◷ Partial listing')+' · '+usage.versions+' uploaded versions · '+esc(usage.scope)+'</p>':'')+'<p>'+esc(r.note||'Awaiting read-only check.')+'</p>'+(manage>=0?'<button class="btn infra-primary" data-b2-open="'+manage+'">Browse files &amp; review deletion →</button>':b2?'<p class="infra-hint">File management requires a matching bucket and prefix on the control plane. Its storage card provides the browse button.</p>':'')+'<details class="infra-card-details"><summary>Details &amp; measurement scope</summary><p>'+esc(r.quota_note||'')+'</p><small>'+(r.checked_at?'Checked '+esc(new Date(r.checked_at).toLocaleString()):'Not checked')+'</small>'+(b2?'<p>Account caps and daily transactions are separate from these bucket bytes. <a href="https://www.backblaze.com/docs/cloud-storage-use-partner-api-reports" target="_blank" rel="noopener noreferrer">Backblaze usage reports ↗</a></p>':'')+'</details></article>';
   }).join('')+'</div></section>';
  }).join('')||(total?'<p class="infra-empty">No components match this filter.</p>':'');
 }
@@ -71,14 +120,14 @@ function renderB2(){
  $('b2-folder').innerHTML='<option value="">All folders</option>'+Array.from(folders).sort().map(f=>'<option value="'+esc(f)+'" '+(f===folder?'selected':'')+'>'+esc(f)+'</option>').join('');
  $('b2-folder').value=folder;
  const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
- $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||!r.ticket||!b2CanDelete?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraBytes(r.size))+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td></tr>').join('');
+ $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||!r.ticket||!b2CanDelete?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td></tr>').join('');
  $('b2-show-more').hidden=rows.length<=b2Visible;
  $('b2-review').disabled=b2Busy||!b2CanDelete||!b2Selection.size;
  $('b2-more').disabled=b2Busy||!b2Cursor;
  const selected=b2Rows.filter(r=>b2Selection.has(r.file_id)),bytes=b2Rows.filter(r=>r.action==='upload').reduce((n,r)=>n+r.size,0);
  $('b2-usage').innerHTML=b2Budget&&b2Complete?'<div class="infra-summary">'+infraDonut(100*bytes/b2Budget,'Listed uploaded version bytes against operator storage budget')+'<span>Listed version storage / operator budget</span></div>':'';
  $('b2-selected').textContent=selected.length+' / 10 selected · '+infraBytes(selected.reduce((n,r)=>n+r.size,0));
- $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraBytes(bytes)+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · deletion unavailable (readFiles/deleteFiles capability required)':'');
+ $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraDecimalBytes(bytes)+' ('+infraBytes(bytes)+')'+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · deletion unavailable (readFiles/deleteFiles capability required)':'');
 }
 async function loadB2(reset=false){
  if(b2Busy||!b2Slot)return;const generation=b2Generation,epoch=authEpoch;
@@ -100,7 +149,7 @@ $('b2-review').onclick=async()=>{
  if(b2Busy||!b2Selection.size)return;const epoch=authEpoch,generation=b2Generation;setB2Busy(true);$('b2-error').textContent='';
  try{const d=await infraRequest('control','/b2/preview',{slot:b2Slot,tickets:b2Rows.filter(r=>b2Selection.has(r.file_id)).map(r=>r.ticket)});if(epoch!==authEpoch||generation!==b2Generation)return;b2Plan=d;
   $('b2-confirm-summary').textContent=d.rows.length+' versions · '+infraBytes(d.bytes)+' · bucket '+d.bucket+'. Type '+d.confirmation+' to confirm. Review expires in 10 minutes.';
-  $('b2-confirm-files').innerHTML=d.rows.map(r=>'<li>'+esc(r.name)+' · '+esc(infraBytes(r.size))+'<br><small>'+esc(r.file_id)+'</small></li>').join('');$('b2-confirm-input').value='';$('b2-delete').disabled=true;$('b2-confirm').showModal();$('b2-confirm-input').focus();
+  $('b2-confirm-files').innerHTML=d.rows.map(r=>'<li>'+esc(r.name)+' · '+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'<br><small>'+esc(r.file_id)+'</small></li>').join('');$('b2-confirm-input').value='';$('b2-delete').disabled=true;$('b2-confirm').showModal();$('b2-confirm-input').focus();
  }catch(e){if(epoch===authEpoch)infraError('b2-error',e);}finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
 };
 $('b2-confirm-input').oninput=()=>{$('b2-delete').disabled=!b2Plan||$('b2-confirm-input').value!==b2Plan.confirmation;};
