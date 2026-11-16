@@ -1,6 +1,7 @@
 {
   "name": "sh01-operations-dashboard-cloudflare",
   "main": "worker.js",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "compatibility_date": "2026-11-03",
   "d1_databases": [
     {
