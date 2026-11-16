@@ -21,11 +21,19 @@ async function infraDeskApi(req,env){
    payload={slot:source.slot,plan:source.plan,confirmation:source.confirmation};
   }
  }
+ const started=Date.now();let stage='validate_origin';
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),path==='/b2/delete'?65000:30000);
  try{
-  const r=await fetch(infraBase(base)+(runtime?'/ops/infra':'/infra/desk')+path+(query.size?'?'+query:''),{method:req.method,headers:{'X-API-KEY':key,...(payload?{'Content-Type':'application/json'}:{})},...(payload?{body:JSON.stringify(payload)}:{}),redirect:'error',signal:controller.signal});
+  const origin=infraBase(base);stage='fetch';
+  const r=await fetch(origin+(runtime?'/ops/infra':'/infra/desk')+path+(query.size?'?'+query:''),{method:req.method,headers:{'X-API-KEY':key,...(payload?{'Content-Type':'application/json'}:{})},...(payload?{body:JSON.stringify(payload)}:{}),redirect:'error',signal:controller.signal});
   if(!r.ok){let d;try{d=await r.json()}catch{}const code=typeof d?.detail==='string'&&/^[a-z][a-z0-9_]{2,100}$/.test(d.detail)?d.detail:'infra_upstream_http_'+r.status;return error(code,r.status===401||r.status===403?502:r.status);}
-  return json(await r.json());
- }catch{return error(path==='/b2/delete'?'infra_delete_outcome_unknown_refresh_files':'infra_upstream_unavailable',502);}
+  stage='parse_response';return json(await r.json());
+ }catch(e){
+  const message=String(e?.message||''),blocked=/\b1042\b|same account|same zone/i.test(message);
+  const reason=stage==='validate_origin'?'invalid_origin':controller.signal.aborted?'timeout':stage==='parse_response'?'invalid_json':blocked?'worker_fetch_blocked':'fetch_exception';
+  return json({error:path==='/b2/delete'?'infra_delete_outcome_unknown_refresh_files':'infra_'+reason,
+   diagnostic:{revision:'infra-bridge-2',stage,reason,elapsed_ms:Date.now()-started,
+    exception:['TypeError','SyntaxError','AbortError','Error'].includes(e?.name)?e.name:'Other'}},502);
+ }
  finally{clearTimeout(timer);}
 }

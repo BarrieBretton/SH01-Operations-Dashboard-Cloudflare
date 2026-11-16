@@ -29,3 +29,17 @@ test('provider errors are sanitized and upstream credential errors do not lock d
  const old=globalThis.fetch;globalThis.fetch=async()=>Response.json({detail:'secret-bearing upstream error'},{status:401});
  try{const r=await worker.fetch(req('/api/infra/control/inventory'),env,{});assert.equal(r.status,502);assert.equal((await r.json()).error,'infra_upstream_http_401');}finally{globalThis.fetch=old;}
 });
+
+test('bridge diagnoses failures without exposing URLs, credentials or raw exceptions',async()=>{
+ const old=globalThis.fetch;let calls=0;
+ try{
+  for(const [mode,expected] of [['origin','invalid_origin'],['blocked','worker_fetch_blocked'],['json','invalid_json'],['network','fetch_exception']]){
+   globalThis.fetch=async()=>{calls++;if(mode==='json')return new Response('secret response');throw Error(mode==='blocked'?'Error 1042 secret credential':'secret credential');};
+   const response=await worker.fetch(req('/api/infra/control/inventory'),{...env,...(mode==='origin'?{OPS_INFRA_CONTROL_URL:'https://secret:credential@example.test'}:{})},{});
+   assert.equal(response.status,502);const data=await response.json();
+   assert.equal(data.error,'infra_'+expected);assert.equal(data.diagnostic.revision,'infra-bridge-2');
+   assert.ok(!JSON.stringify(data).includes('secret'));assert.ok(!JSON.stringify(data).includes('credential'));
+  }
+  assert.equal(calls,3);
+ }finally{globalThis.fetch=old;}
+});
