@@ -66,3 +66,13 @@ test('services have distinct representative icon geometry and use no external im
  const h=harness();const icons=['b2:a','redis','postgres:a','google','telegram','imagekit','runtime','render:a:sh01','n8n','queue','sla','youtube','meta','threads','tumblr','x','cloudflare','pulsetic','kite'].map(id=>h.run('infraServiceIcon({id:'+JSON.stringify(id)+'})'));
  assert.equal(new Set(icons).size,icons.length);for(const html of icons){assert.match(html,/aria-hidden="true"/);assert.doesNotMatch(html,/<img|https:/);}
 });
+
+test('scan retains Streamables matches when a later sheet fails and marks eligibility unknown',async()=>{
+ const h=harness();h.c.setTimeout=()=>0;h.c.clearTimeout=()=>{};
+ h.run("b2Bucket='bucket';b2Complete=true;b2Slot='slot';b2Rows=[{file_id:'a',name:'videos/a.mp4',size:20,uploaded_at:0,action:'upload'}];b2ReferencePause=async()=>{}");
+ const meta={fingerprint:'test',issues:[],sheets:[{id:1,title:'Archive',mode:'included',rows:2,columns:2,type:'GRID'},{id:2,title:'streamables-yt',mode:'included',designated:true,rows:2,columns:2,type:'GRID'}]},calls=[];
+ h.c.infraRequest=async(scope,path,payload)=>{if(path==='/b2/workbook')return meta;calls.push(payload.sheet_id);if(payload.sheet_id===1)throw Error('b2_workbook_http_403');return {fingerprint:'test',sheet_id:2,start_row:0,end_row:2,next_row:null,observed_at:new Date().toISOString(),issues:[],references:[{file_id:'a',sheet:'streamables-yt',column:'url',column_letter:'G',row:2,designated:true,status:'uploaded',uncertain:false,cell_url:'https://docs.google.com/spreadsheets/d/book/edit#gid=2&range=G2'}]};};
+ await h.run('b2ScanWorkbook()');assert.deepEqual(calls,[2,1]);assert.equal(h.run('b2ReferenceScan.complete'),false);assert.equal(h.run('b2ReferenceScan.references.length'),1);
+ assert.match(h.get('b2-rows').innerHTML,/Referenced/);assert.match(h.get('b2-rows').innerHTML,/Unable to determine/);assert.match(h.get('b2-rows').innerHTML,/gid=2&amp;range=G2/);
+ assert.equal(h.run('b2Selection.size'),0);
+});

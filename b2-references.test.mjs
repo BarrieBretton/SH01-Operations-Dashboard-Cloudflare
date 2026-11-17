@@ -28,7 +28,7 @@ test('path refs protect all versions; exact ID refs conservatively protect the e
  }
 });
 test('plain paths require verified bucket context; unresolved paths cannot authorize eligibility',()=>{
- const c=ctx(),d=match(c,[['folder/a b.mp4','uploaded']]);assert.equal(d.references[0].uncertain,true);assert.equal(c.b2Classify(obj,scan(d.references)).deletion_eligibility,'Ineligible');
+ const c=ctx(),d=match(c,[['folder/a b.mp4','uploaded']]);assert.equal(d.references[0].uncertain,true);assert.equal(c.b2Classify(obj,scan(d.references)).deletion_eligibility,'Unable to determine');
  const good=match(c,[['folder/a b.mp4','uploaded']],{...sheet,default_bucket:'bucket'});assert.equal(good.references[0].uncertain,false);assert.equal(c.b2Classify(obj,scan(good.references)).deletion_eligibility,'Eligible');
 });
 test('exact uploaded status only, including missing/error/duplicate status columns',()=>{
@@ -48,7 +48,7 @@ test('all combinations of designated and non-designated references, all reasons 
 });
 test('only complete, fresh, issue-free scans may declare objects unreferenced/eligible',()=>{
  const c=ctx();assert.equal(c.b2Classify(obj,scan()).deletion_eligibility,'Eligible');
- for(const s of [null,{...scan(),complete:false},{...scan(),finished_at:new Date(Date.now()-60001).toISOString()},scan([],[{sheet:'Unknown',reason:'scan failed'}])]){const d=c.b2Classify(obj,s);assert.equal(d.deletion_eligibility,'Ineligible');assert.match(d.workbook_reference_status,/Unknown/);assert.ok(d.deletion_ineligibility_reason);}
+ for(const s of [null,{...scan(),complete:false},{...scan(),finished_at:new Date(Date.now()-600001).toISOString()},scan([],[{sheet:'Unknown',reason:'scan failed'}])]){const d=c.b2Classify(obj,s);assert.equal(d.deletion_eligibility,'Unable to determine');assert.match(d.workbook_reference_status,/Unknown/);assert.ok(d.deletion_ineligibility_reason);}
  assert.equal(c.b2Classify({...obj,action:'hide'},scan()).deletion_eligibility,'Ineligible');
 });
 test('hyperlinks, rich-text links and JSON refs deduplicate per cell without losing other coordinates',()=>{
@@ -57,17 +57,15 @@ test('hyperlinks, rich-text links and JSON refs deduplicate per cell without los
  assert.equal(d.issues.length,0);assert.equal(d.references.length,4);assert.deepEqual(Array.from(new Set(d.references.map(r=>r.row))),[2,3]);
 });
 test('malformed B2 URL, unresolved IDs and formula errors block no-reference classification',()=>{
- const c=ctx();for(const v of ['https://f005.backblazeb2.com/file/bucket/%ZZ','https://api005.backblazeb2.com/b2api/v3/b2_download_file_by_id?fileId=missing',{effectiveValue:{errorValue:{type:'REF'}}}]){const d=match(c,[[v,'uploaded']]);assert.ok(d.issues.length);assert.equal(c.b2Classify(obj,scan(d.references,d.issues)).deletion_eligibility,'Ineligible');}
+ const c=ctx();for(const v of ['https://f005.backblazeb2.com/file/bucket/%ZZ','https://api005.backblazeb2.com/b2api/v3/b2_download_file_by_id?fileId=missing',{effectiveValue:{errorValue:{type:'REF'}}}]){const d=match(c,[[v,'uploaded']]);assert.ok(d.issues.length);assert.equal(c.b2Classify(obj,scan(d.references,d.issues)).deletion_eligibility,'Unable to determine');}
 });
-test('sheet discovery uses IDs plus exact titles; no -YT/-VT guesses; partial protection is unresolved',()=>{
- const c=ctx(),s={properties:{sheetId:7,title:'streamables-yt',gridProperties:{rowCount:1000,columnCount:70}}};
- assert.equal(c.b2SheetInfo(s,{sheets:{}}).mode,'unreviewed');
- const policy={sheets:{7:{title:s.properties.title,mode:'include',no_log_button:true,unlocked:true}}};assert.equal(c.b2SheetInfo(s,policy).designated,false);
- policy.sheets[7].designated_uploaded_only=true;assert.equal(c.b2SheetInfo(s,policy).designated,true);
- assert.equal(c.b2SheetInfo({...s,protectedRanges:[{range:{sheetId:7}}]},policy).mode,'excluded');
- assert.equal(c.b2SheetInfo({...s,protectedRanges:[{range:{sheetId:7,startRowIndex:1,endRowIndex:2}}]},policy).mode,'unreviewed');
- assert.equal(c.b2SheetInfo({...s,properties:{...s.properties,title:'Renamed'}},policy).mode,'unreviewed');
- policy.sheets[7].mode='exclude_logged';assert.equal(c.b2SheetInfo(s,policy).mode,'excluded');
+test('padlock rule discovers unprotected tabs and excludes whole-sheet protection without operator flags',()=>{
+ const c=ctx(),s={properties:{sheetId:7,title:'streamables-yt',gridProperties:{rowCount:1000,columnCount:70}}},policy={sheets:{}};
+ assert.equal(c.b2SheetInfo(s,policy).mode,'included');assert.equal(c.b2SheetInfo(s,policy).designated,true);
+ for(const title of ['streamables','streamables-yt','Archive','streamables-VT'])assert.equal(c.b2SheetInfo({...s,properties:{...s.properties,title}},policy).designated,['streamables','streamables-yt'].includes(title));
+ for(const warningOnly of [true,false])for(const range of [{sheetId:7},{sheetId:7,startRowIndex:0,endRowIndex:1000,startColumnIndex:0,endColumnIndex:70}])assert.equal(c.b2SheetInfo({...s,protectedRanges:[{range,warningOnly}]},policy).mode,'excluded');
+ assert.equal(c.b2SheetInfo({...s,protectedRanges:[{range:{sheetId:7,startRowIndex:1,endRowIndex:2}}]},policy).mode,'included');
+ assert.equal(c.b2SheetInfo({...s,properties:{...s.properties,title:'New tab'}},policy).mode,'included');
 });
 test('reference and eligibility filters combine rather than replacing each other',()=>{
  const c=ctx();c.$('b2-reference-filter').value='Referenced';c.$('b2-eligibility-filter').value='Eligible';
@@ -89,8 +87,33 @@ test('actual Worker routes use existing auth, scan all columns beyond AZ, and re
  try{
   assert.equal((await worker.fetch(req('/b2/workbook',null,'bad'),env,{})).status,401);assert.equal(calls.length,0);
   const meta=await (await worker.fetch(req('/b2/workbook'),env,{})).json();assert.equal(meta.sheets.length,1);
-  const r=await worker.fetch(req('/b2/reference-scan',{fingerprint:meta.fingerprint,sheet_id:1,start_row:0,bucket:'bucket',objects}),env,{});assert.equal(r.status,200);const result=await r.json();assert.equal(result.references.length,2);assert.equal(result.references[0].column,'b2_url');assert.equal(result.references[0].row,2);assert.equal(result.next_row,null);
+  const r=await worker.fetch(req('/b2/reference-scan',{fingerprint:meta.fingerprint,sheet_id:1,start_row:0,bucket:'bucket',objects}),env,{});assert.equal(r.status,200);const result=await r.json();assert.equal(result.references.length,2);assert.equal(result.references[0].column,'b2_url');assert.equal(result.references[0].row,2);assert.equal(result.next_row,null);assert.equal(result.references[0].cell,'BH2');assert.equal(result.references[0].a1_location,"'Streamables'!BH2");assert.equal(result.references[0].cell_url,'https://docs.google.com/spreadsheets/d/book/edit#gid=1&range=BH2');
   const bad=await worker.fetch(req('/b2/reference-scan',{fingerprint:'old'}),env,{});assert.equal(bad.status,409);
   assert.ok(calls.every(([u])=>!u.includes('delete')&&!u.includes('batchUpdate')));
  }finally{globalThis.fetch=old;}
+});
+
+test('canonical cell links escape sheet titles and retain each separate coordinate',()=>{
+ const c=ctx();const refs=[{sheet:"Owner's archive",sheet_id:9,column:'file_url',column_letter:'BC',row:42},{sheet:'Other',sheet_id:10,column:'b2_path',column_letter:'AA',row:18}].map(r=>c.b2ReferenceCoordinates(r,'book_123'));
+ assert.equal(refs[0].a1_location,"'Owner''s archive'!BC42");
+ assert.equal(refs[0].cell_url,'https://docs.google.com/spreadsheets/d/book_123/edit#gid=9&range=BC42');
+ assert.equal(refs[1].cell_url,'https://docs.google.com/spreadsheets/d/book_123/edit#gid=10&range=AA18');
+ for(const r of refs){assert.match(c.b2ReferenceLink(r),/target="_blank" rel="noopener noreferrer"/);assert.ok(c.b2ReferenceLink(r).includes(r.cell_url));}
+ assert.doesNotMatch(c.b2ReferenceLink({...refs[0],cell_url:'javascript:alert(1)'}),/<a /);
+});
+
+test('JSON control data cannot become a file reference column heading',()=>{
+ const c=ctx(),value=JSON.stringify({revision:12221,recent:[{id:'foo',digest:'bar'}]});
+ const d=c.b2MatchCells({...sheet,title:'internal',designated:false},[cell('control'),cell(value)],[{values:[cell('control'),cell(value)]}],0,'bucket',objects);
+ assert.equal(d.issues.length,0);assert.equal(d.references.length,0);
+});
+test('read-only retry waits on 429 and preserves the same chunk; non-quota failures do not retry',async()=>{
+ const c=ctx();let calls=0,waits=[];c.infraRequest=async()=>{if(++calls===1)throw Error('b2_workbook_http_429');return {ok:true};};c.b2ReferencePause=async ms=>waits.push(ms);
+ assert.equal((await c.b2ReferenceRead(()=>true,'/b2/reference-scan',{start_row:0})).ok,true);assert.equal(calls,2);assert.deepEqual(waits,[65000]);
+ calls=0;c.infraRequest=async()=>{calls++;throw Error('b2_workbook_http_403')};await assert.rejects(c.b2ReferenceRead(()=>true,'/b2/workbook'),/403/);assert.equal(calls,1);
+ await assert.rejects(c.b2ReferenceRead(()=>true,'/b2/delete',{}),/Not a read-only/);
+});
+
+test('reference header labels are not unresolved file values',()=>{
+ const c=ctx();const d=c.b2MatchCells(sheet,head,[{values:head}],0,'bucket',objects);assert.equal(d.issues.length,0);
 });

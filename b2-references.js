@@ -10,15 +10,17 @@ function b2Policy(env){
 }
 function b2SheetInfo(s,policy){
  const p=s.properties,c=policy.sheets[String(p.sheetId)],protections=s.protectedRanges||[];
- const whole=protections.some(r=>!r.warningOnly&&r.range&&['startRowIndex','endRowIndex','startColumnIndex','endColumnIndex'].every(k=>r.range[k]===undefined));
- let mode='unreviewed',reason='Log button / lock classification has not been verified.';
- if(whole){mode='excluded';reason='Whole-sheet protection reported by Google Sheets.';}
- else if(c?.title===p.title&&c.mode==='exclude_logged'){mode='excluded';reason='Operator verified Log button / locked sheet.';}
- else if(c?.title===p.title&&c.mode==='include'&&c.no_log_button===true&&c.unlocked===true&&!protections.length){mode='included';reason='Operator verified no Log button and no lock; no API protections.';}
- const header=Number.isInteger(c?.header_row)&&c.header_row>0?c.header_row:1;
+ const whole=protections.some(r=>r.range&&(r.range.startRowIndex??0)===0&&(r.range.startColumnIndex??0)===0&&
+  (r.range.endRowIndex===undefined||r.range.endRowIndex>=p.gridProperties?.rowCount)&&
+  (r.range.endColumnIndex===undefined||r.range.endColumnIndex>=p.gridProperties?.columnCount));
+ // The operator meant sheet-tab protection, not a separate Log button.
+ // Partial ranges are retained in matching; they do not exclude an entire sheet.
+ const mode=whole?'excluded':'included';
+ const reason=whole?'Whole-sheet protection: excluded by the padlock-sheet rule.':'No whole-sheet protection: included in workbook matching.';
+ const header=c?.title===p.title&&Number.isInteger(c?.header_row)&&c.header_row>0?c.header_row:1;
  return {id:p.sheetId,title:p.title,mode,reason,header_row:header,rows:p.gridProperties?.rowCount||0,columns:p.gridProperties?.columnCount||0,
-  designated:mode==='included'&&(p.title==='Streamables'||p.title==='Streamables-VT'||c?.designated_uploaded_only===true),
-  default_bucket:mode==='included'&&typeof c?.default_bucket==='string'?c.default_bucket:null,
+  designated:mode==='included'&&(['streamables','streamables-yt'].includes(p.title)),
+  default_bucket:mode==='included'&&c?.title===p.title&&typeof c?.default_bucket==='string'?c.default_bucket:null,
   type:p.sheetType||'GRID',has_protection:!!protections.length};
 }
 async function b2SheetGet(env,token,query){
@@ -32,10 +34,10 @@ async function b2WorkbookMetadata(env,token){
  const policy=b2Policy(env),d=await b2SheetGet(env,token,{fields:'sheets(properties,protectedRanges(range,warningOnly)),spreadsheetId'});
  if(d.spreadsheetId!==env.GOOGLE_SHEETS_SPREADSHEET_ID||!Array.isArray(d.sheets)||!d.sheets.length)throw Error('b2_workbook_metadata_invalid');
  const sheets=d.sheets.map(s=>b2SheetInfo(s,policy)).sort((a,b)=>a.id-b.id);
- const fingerprint=await producerHash(JSON.stringify([d.spreadsheetId,sheets]));
+ const fingerprint=await producerHash(JSON.stringify([d.spreadsheetId,sheets.map(s=>s.mode==='excluded'?{id:s.id,title:s.title,mode:s.mode}:s)]));
  return {version:B2_REFERENCE_VERSION,fingerprint,sheets,observed_at:new Date().toISOString(),
   issues:sheets.filter(s=>s.mode==='unreviewed').map(s=>({sheet:s.title,reason:s.reason})),
-  note:'Read-only observations, not an atomic workbook snapshot or deletion authorization. Log/drawing buttons require operator verification.'};
+  note:'Read-only observations, not an atomic workbook snapshot or deletion authorization. Protected sheets are excluded automatically; partial cell-range protections do not exclude entire tabs.'};
 }
 // Decode URL path segments once. Never normalize case, Unicode, slashes or dot segments in object keys.
 function b2Identity(value){
@@ -75,7 +77,7 @@ function b2CellTokens(cell){
 function b2MatchCells(sheet,header,cells,start,bucket,objects){
  const byId=new Map(),byName=new Map(),refs=[],issues=[],seen=new Set();
  for(const o of objects){byId.set(o.file_id,o);if(!byName.has(o.name))byName.set(o.name,[]);byName.get(o.name).push(o);}
- const headers=header.map(c=>String(b2Value(c))),statusColumns=headers.flatMap((h,i)=>h==='status'?[i]:[]);
+ const headers=header.map((c,n)=>{const v=String(b2Value(c));return v.length<=120&&!/[{}\[\]\r\n]/.test(v)?v:b2Column(n);}),statusColumns=headers.flatMap((h,i)=>h==='status'?[i]:[]);
  const bucketColumns=headers.flatMap((h,i)=>['bucket','bucket_name','b2_bucket','b2_bucket_name'].includes(h.toLowerCase().trim())?[i]:[]);
  for(let i=0;i<cells.length;i++){
   const rowNumber=start+i+1;
@@ -96,7 +98,7 @@ function b2MatchCells(sheet,header,cells,start,bucket,objects){
     else if(byName.has(token)){
      if(!contextualBucket||contextualBucket===bucket){matched=byName.get(token);uncertain=!contextualBucket;}
     }else if(identity?.unknown_url&&typed){issues.push({...location,reason:'Custom/unknown URL in a file reference column; bucket/key cannot be verified.'});}
-    else if(!identity&&typed&&token&&!['status','bucket','bucket_name','b2_bucket','b2_bucket_name'].includes(column.toLowerCase())&&!/^(?:n\/a|null|none)$/i.test(token)){
+    else if(rowNumber>sheet.header_row&&!identity&&typed&&token&&!['status','bucket','bucket_name','b2_bucket','b2_bucket_name'].includes(column.toLowerCase())&&!/^(?:n\/a|null|none)$/i.test(token)){
      // A path in a verified bucket can refer to an object no longer present. An unknown ID cannot.
      if(!contextualBucket||/id/i.test(column))issues.push({...location,reason:'Unresolved file reference; no canonical bucket/path or matching version ID.'});
     }
@@ -111,6 +113,11 @@ function b2MatchCells(sheet,header,cells,start,bucket,objects){
  const unique=[...new Map(issues.map(x=>[JSON.stringify(x),x])).values()];
  return {references:refs,issues:unique};
 }
+function b2ReferenceCoordinates(reference,workbookId){
+ const cell=reference.column_letter+reference.row;
+ return {...reference,workbook_id:workbookId,cell,a1_location:"'"+reference.sheet.replaceAll("'","''")+"'!"+cell,
+  cell_url:'https://docs.google.com/spreadsheets/d/'+encodeURIComponent(workbookId)+'/edit#gid='+reference.sheet_id+'&range='+encodeURIComponent(cell)};
+}
 async function b2ReferenceApi(req,env,path){
  try{
   const token=await sheetToken(env),meta=await b2WorkbookMetadata(env,token);
@@ -122,17 +129,21 @@ async function b2ReferenceApi(req,env,path){
   const sheet=meta.sheets.find(s=>s.id===input.sheet_id);
   if(!sheet||sheet.mode==='excluded'||sheet.type!=='GRID'||!sheet.columns||sheet.columns>20000)return error('b2_sheet_not_scannable',409);
   const start=input.start_row;if(!Number.isInteger(start)||start<0||start>=sheet.rows)return error('b2_sheet_range_invalid',400);
-  const end=Math.min(sheet.rows,start+Math.max(1,Math.floor(20000/sheet.columns)));
+  const end=Math.min(sheet.rows,start+Math.max(1,Math.floor(50000/sheet.columns)));
   const title="'"+sheet.title.replaceAll("'","''")+"'!",last=b2Column(sheet.columns-1);
   const fields='sheets(properties(sheetId),data(startRow,rowData(values(effectiveValue,userEnteredValue,hyperlink,textFormatRuns(format(link)),userEnteredFormat(textFormat(link))))))';
-  const [head,chunk]=await Promise.all([
-   b2SheetGet(env,token,{ranges:title+'A'+sheet.header_row+':'+last+sheet.header_row,fields}),
-   b2SheetGet(env,token,{ranges:title+'A'+(start+1)+':'+last+end,fields})
-  ]);
-  const extract=d=>{const s=d.sheets?.find(s=>s.properties?.sheetId===sheet.id);if(!s||!Array.isArray(s.data))throw Error('b2_workbook_grid_invalid');return s.data[0]||{};};
-  const h=extract(head),c=extract(chunk);
-  if((h.startRow||0)!==sheet.header_row-1||(c.startRow||0)!==start)throw Error('b2_workbook_grid_invalid');
-  const result=b2MatchCells(sheet,h.rowData?.[0]?.values||[],c.rowData||[],start,input.bucket,input.objects);
-  return json({...result,sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
+  // One grid request includes header and chunk. Do not fetch the header separately.
+  const ranges=[title+'A'+(start+1)+':'+last+end];
+  if(sheet.header_row<start+1||sheet.header_row>end)ranges.unshift(title+'A'+sheet.header_row+':'+last+sheet.header_row);
+  const query=new URLSearchParams({fields});for(const range of ranges)query.append('ranges',range);
+  const data=await b2SheetGet(env,token,query);
+  const grids=data.sheets?.find(s=>s.properties?.sheetId===sheet.id)?.data;
+  if(!Array.isArray(grids))throw Error('b2_workbook_grid_invalid');
+  const c=grids.find(g=>(g.startRow||0)===start);
+  const h=grids.find(g=>sheet.header_row-1>=(g.startRow||0)&&sheet.header_row-1<(g.startRow||0)+(g.rowData?.length||0));
+  if(!c)throw Error('b2_workbook_grid_invalid');
+  const header=h?.rowData?.[sheet.header_row-1-(h.startRow||0)]?.values||[];
+  const result=b2MatchCells(sheet,header,c.rowData||[],start,input.bucket,input.objects);
+  return json({...result,references:result.references.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
  }catch(e){return error(/^(b2_|missing_GOOGLE_|google_)[a-zA-Z0-9_]+$/.test(e?.message)?e.message:'b2_reference_scan_failed',503);}
 }

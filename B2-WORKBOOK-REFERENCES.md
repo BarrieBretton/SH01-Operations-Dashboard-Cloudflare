@@ -1,118 +1,93 @@
-# B2 workbook reference review
+# B2 workbook reference review — padlock correction
 
-This release is read-only. It does not delete B2 objects, edit workbook cells,
-change n8n workflows, or change FastAPI. Operations Desk B2 preview/delete proxy
-routes now return HTTP 409 `b2_deletion_disabled_reference_review_only`, including
-calls from old browser tabs. Existing FastAPI/n8n routes are unchanged.
-Classification is evidence, never deletion authorization.
+The operator clarified that "Log" meant the padlock beside a Google Sheets tab,
+not a separate button. No per-tab Log verification or new environment variable
+is required. Existing Google OAuth credentials and workbook ID are reused.
 
-## Inspection and live acceptance
+## Sheet selection
 
-The deployed master component files matched this patch's source baseline.
-The desk reuses Google OAuth and GOOGLE_SHEETS_SPREADSHEET_ID. B2 listings come
-from FastAPI's control-plane API. The existing stock collector reads fixed tabs;
-it cannot prove workbook-wide absence of a reference.
+Discover every sheet, including hidden sheets. Exclude sheets whose Google API
+protection covers the whole sheet, including warning-only whole-sheet protection
+and protections expressed using explicit grid bounds. Partial cell-range
+protection does not exclude an entire sheet. No sheet is excluded by its name.
+Every excluded sheet and its reason appears in the evidence report.
 
-Historical n8n source registry titles: Foglio1, Links, Sheet1, affiliate-links,
-captions-archive, clickouts, media-edit-clips, pinterest-search-queries,
-streamables, streamables-yt, telegram_audio_social_queue, workflow-schedule,
-yt-accounts-mapper-store. These are NOT verified current workbook tabs or
-verified unlocked/unlogged sheets. `streamables-yt` is not automatically treated
-as `Streamables-VT`. Live Google credentials were unavailable in this session.
+The exact designated titles are `streamables` and `streamables-yt`, confirmed
+by the operator's screenshot and live metadata audit. Other spellings are not
+silently treated as designated. Any other included-sheet reference protects the
+object, regardless of status elsewhere. Newly added unprotected tabs are scanned.
 
-After deploying master, open Infrastructure > Browse files. Complete the B2
-listing, then **Scan workbook references**. The discovery panel enumerates ALL
-tabs including hidden tabs, exact IDs/titles, protections, coverage and issues.
-All allocated grid columns are scanned, including those beyond AZ. Download
-**evidence JSON** for the full report; keep its object names/statuses private.
+The old OPS_B2_WORKBOOK_POLICY_JSON setting is no longer needed for inclusion,
+exclusion or designation. If present, it must still be valid and bound to the
+workbook. Optional header_row/default_bucket values apply only when its exact
+sheet ID and title match. There is no need to set this variable for ordinary
+B2 URLs; they already carry the bucket name.
 
-Google Sheets API exposes protections, but not a reliable custom Log drawing
-button inventory. Verify those indicators in the actual workbook. Without this
-verification, no API protection does NOT prove an unlogged/unlocked sheet.
-Unreviewed sheets block eligibility. Whole-sheet enforced protection excludes
-a sheet; partial/warning-only protection remains unresolved.
+## Matching and classification
 
-Set OPS_B2_WORKBOOK_POLICY_JSON on the dashboard Worker, using actual workbook
-and numeric sheet IDs, exact titles and verified flags. Example ONLY:
+Compare exact bucket + complete object key, or resolve a version ID present in
+the listed inventory. Native B2, S3 and b2:// representations are supported.
+Ignore signed URL query credentials. Decode URL keys once; preserve case,
+Unicode, repeated slashes, plus signs and dot segments. No basename/substrings.
+Unqualified paths need verified bucket context to establish eligibility.
+Path and ID matches conservatively protect every listed version of the same key.
 
-```json
-{
-  "version": 1,
-  "workbook_id": "YOUR_EXISTING_WORKBOOK_ID",
-  "sheets": {
-    "123": {
-      "title": "Streamables", "mode": "include",
-      "no_log_button": true, "unlocked": true, "header_row": 1,
-      "default_bucket": "YOUR_VERIFIED_BUCKET_NAME"
-    },
-    "456": {
-      "title": "Archive", "mode": "include",
-      "no_log_button": true, "unlocked": true, "header_row": 1
-    },
-    "789": { "title": "Actual logged tab", "mode": "exclude_logged" }
-  }
-}
-```
+Read effective values, hyperlinks, rich-text links and JSON strings. Retain all
+matching sheets, columns and rows. Deduplicate repeated representations within
+the same cell/version. JSON blobs are never used as column headings. Ordinary
+column heading labels are not treated as unresolved object references.
 
-Do not exclude sheets merely because their name contains "log". Newly added or
-renamed tabs become unreviewed. Deleted tabs disappear at the next discovery.
-Only exact Streamables / Streamables-VT are designated by default. If inspection
-proves another spelling is the intended designated stock tab, explicitly add
-`"designated_uploaded_only": true` to THAT reviewed sheet entry. Never add it
-to Archive or other reference sheets. The exact `status` column is required.
-`default_bucket` is optional and only valid after verifying unqualified paths'
-bucket. Per-row bucket/bucket_name/b2_bucket/b2_bucket_name also supplies context.
-Refresh files and scan again after configuring the policy.
+- Complete fresh scan, no references, no unresolved issues: Eligible.
+- References exclusively in the two designated sheets, every status exactly
+  `uploaded`: Eligible. Case/whitespace variants and missing statuses do not pass.
+- Known non-designated reference or known non-uploaded designated reference:
+  Ineligible, with every blocking reference's exact reason.
+- Incomplete/failed/expired scan or uncertain identity without a proven blocker:
+  Unable to determine. It is never treated as eligible or unreferenced.
+- Hide markers are separate from uploaded file versions and remain ineligible.
 
-## Matching and rules
+Workbook References contains a separate clickable cell link for each reference.
+Audit JSON includes workbook ID, sheet ID/title, header name, column letter, row,
+cell address, quoted A1 location and cell_url. Coordinates are observations, not
+permanent row identities. Re-scan after moving/inserting/deleting rows.
 
-- Native B2, S3 path/virtual-host URLs, b2://bucket/key, exact version IDs, and
-  exact paths with verified bucket context. Decode URL keys once; preserve case,
-  Unicode, plus signs, repeated slashes and dot segments. No basename/substrings.
-- Read effective values, formula hyperlinks/literal URL arguments, rich-text
-  links and JSON strings. Headers label columns; A1 letters disambiguate blanks
-  and duplicate headers. References in/before the header are protected.
-- IDs and paths conservatively match all listed versions of the same bucket/key.
-  Multiple coordinates are retained; repeated representations per cell dedupe.
-- No refs + complete fresh issue-free evidence => Eligible.
-- Exclusively designated refs + every exact status `uploaded` => Eligible.
-  Case/whitespace variants, missing/duplicate status columns, errors fail.
-- Any other qualifying sheet ref => Ineligible, overriding uploaded elsewhere.
-  Every blocking reference contributes its sheet/column/row/status/rule reason.
-- Unknown references, absent bucket context, malformed URLs, unresolved IDs,
-  unsupported custom URLs in file-reference columns, access/formula errors,
-  incomplete scans and limits => manual review. They never mean Unreferenced.
-  Unrecognized opaque formats/custom download aliases need explicit integration;
-  unrelated generic URLs are not assumed to be B2. No arbitrary URLs are fetched.
+## Scan operation and quotas
 
-## Display and limits
+The supplied audit contained 47 sheets, 417 B2 versions, zero collected matches,
+47 unnecessary Log/lock verification blockers, one false JSON-header reference,
+and a Google HTTP 429. This was an incomplete scan, not proof of ineligibility.
 
-Preserves filename/ID, size, uploaded time and action. Adds Workbook Reference
-Status, Workbook References, Deletion Eligibility, Deletion Ineligibility Reason.
-Reference and eligibility filters combine with folder/search/sort (largest first).
-Only current eligible rows can be selected for READ-ONLY evidence review.
+This correction scans designated sheets first, combines header/chunk reads into
+one grid request, increases bounded chunks to 50,000 cells, spaces successive
+chunks by four seconds, and retries read-only quota failures after 65 and 130
+seconds. The browser displays the pause; keep the tab open. Retry exhaustion or
+other read errors are recorded by sheet, while other sheets can still be scanned.
+Matches/links are retained and rendered as chunks arrive. Any failed sheet keeps
+absence-based eligibility unknown. Nothing is automatically deleted or queued.
 
-Evidence expires after 60 seconds; refresh invalidates it and lock clears it.
-The report records the observation window. Google grid reads are not an atomic
-workbook snapshot; concurrent edits can happen between chunks. Labels must not
-be reused as deletion authorization. There is no persisted cell-content cache.
+Metadata/policy is checked during scanning and again at completion. Grid growth
+in excluded sheets does not invalidate the matching scan. Metadata/policy changes
+in included sheets require a restart. These are sequential observations, not an
+atomic workbook snapshot; concurrent cell edits can occur between reads.
 
-Bounds: 20,000 cells/request; 10,000 B2 versions; 800,000-character identity
-payload; 100 chunks/scan; 50,000 refs/issues. Limit/quota/HTTP failures are explicit
-and block eligibility. Google read quotas may interrupt large scans; retry after
-quota recovery. Prefix-scoped inventories cannot resolve IDs outside that scope.
+Read-only evidence expires after ten minutes, clears on lock and invalidates on
+file refresh. No report is authorization for a future deletion operation.
+Bounds: 10,000 B2 versions, 800,000-character identity payload, 100 chunks,
+50,000 total refs/issues. Bounds and failures stay explicit and block eligibility.
+Google quotas shared with other dashboard processes may still delay large scans.
 
-Authenticated read-only routes:
-GET /api/infra/control/b2/workbook — discovery/protection/policy report.
-POST /api/infra/control/b2/reference-scan — reads a chunk against the displayed
-inventory; browser-supplied identities are NOT an authoritative deletion grant.
-No eligibility claim from this endpoint can authorize a write.
+## Deployment and validation
 
-## Validation
+Apply the guarded single-file installer and publish dashboard master. After
+Cloudflare deployment, hard-refresh the browser, browse B2 files and press
+Scan workbook references once. Allow quota pauses to finish. Use the discovery
+panel or Download evidence JSON to inspect coverage and remaining real issues.
 
-From the ops repo: `python build_ui.py`, then `node --test *.test.mjs`.
-Fixtures cover identities/encoding, all rule combinations, exact statuses,
-multiple references, overrides, protections, metadata changes, auth, columns
-beyond AZ, filters, expiration and disabled deletion routes. No live deletion
-or workbook mutation was tested. Full live discovery and Log-button verification
-remain acceptance steps; they have not been represented as completed.
+The patch changes only the Operations Desk. Its B2 preview/delete proxy remains
+HTTP 409 (read-only release); FastAPI and n8n routes are unchanged. No workbook
+cells or B2 objects were modified/deleted during implementation or tests.
+Run `python build_ui.py` and `node --test *.test.mjs` from the ops repo.
+Validation uses fixtures including the audit failure patterns, exact statuses,
+all reference combinations, canonical cell links, padlock rules, retry behavior,
+partial-result retention, filters, authentication and blocked deletion requests.
+Live successful scan acceptance remains to be verified after deployment.

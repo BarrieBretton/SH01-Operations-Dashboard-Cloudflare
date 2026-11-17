@@ -848,3 +848,23 @@ Unverified: live workbook inventory, Log-button states, exact second Streamables
 title, live credential scopes and production deployment. Historical workflow
 names are code evidence only. Tests do not establish live scan completeness.
 No B2 objects were deleted and no workbook data was changed during implementation.
+
+B2 reference locations include workbook ID, sheet ID/title, column name/letter,
+row, quoted A1 address and a clickable Google Sheets cell link for every match.
+Coordinates describe the observed scan; row insertion/deletion requires refresh.
+
+### Padlock clarification and audit repair (2026-11-18)
+
+Supersedes the earlier Log-button verification requirement: the operator meant
+sheet-tab padlocks. Whole-sheet protections (including warning-only protections)
+are excluded; unprotected tabs and tabs with only partial range protection are
+scanned automatically. Exact designated tabs are `streamables`/`streamables-yt`.
+The supplied live audit showed 47 tabs, 417 versions, zero recorded references,
+47 verification blockers, a JSON-heading false positive and a Google 429.
+Those are scan failures, not evidence of safe or unsafe business references.
+
+Code now combines header/chunk reads, paces chunks, retries read-only 429s,
+retains successful matches across sheet failures and distinguishes Unable to
+determine from Ineligible. Evidence lasts ten minutes and remains read-only.
+See B2-WORKBOOK-REFERENCES.md. No new configuration is required for URL matching.
+Production scan success and eventual classifications remain unverified here.
