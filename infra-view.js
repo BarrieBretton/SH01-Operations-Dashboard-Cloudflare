@@ -115,6 +115,7 @@ async function loadInfra(){
 }
 function setB2Busy(busy){b2Busy=busy;for(const id of ['b2-reload','b2-more','b2-review','b2-clear'])$(id).disabled=busy;renderB2();}
 function renderB2(){
+ b2RenderActivity();
  for(const row of b2Rows)Object.assign(row,b2Classify(row,b2ReferenceScan));
  for(const id of b2Selection)if(!b2Rows.some(r=>r.file_id===id&&r.deletion_eligibility==='Eligible'))b2Selection.delete(id);
  $('b2-scan-references').disabled=b2Busy||b2ReferenceBusy||!b2Complete;

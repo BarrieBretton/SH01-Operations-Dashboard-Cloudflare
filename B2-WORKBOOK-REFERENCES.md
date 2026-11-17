@@ -124,3 +124,12 @@ Deletion Ineligibility Reason remains blank for eligible rows in the audit JSON;
 the table's combined explanation column displays the positive reason instead.
 Informational warnings and unresolved issues remain separately visible in the
 report. A fresh scan is required; the old audit is not retroactively relabeled.
+
+## Visible loading feedback
+
+An activity panel above the scan controls shows a spinner, current sheet,
+processed-sheet progress and match count. File loading, sheet discovery,
+scanning, final verification and quota waits have distinct labels. Quota pauses
+show an automatic-retry countdown. Completion stops the spinner; lock clears the
+panel. Reduced motion is supported. Pending rows explain that scanning is in
+progress rather than asking users to refresh. Eligibility rules are unchanged.

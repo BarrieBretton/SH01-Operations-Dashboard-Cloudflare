@@ -879,3 +879,7 @@ and scope unresolved literal keys to their exact key. Explicit B2 matches still
 apply in every column; uncertain B2 IDs and file formula errors stay blocking.
 Row evidence now includes positive/negative eligibility explanations and links
 to specific blocking cells. Validation is mocked; live post-fix scan pending.
+
+B2 loading now displays an activity panel, spinner, current-sheet progress and
+quota-retry countdown. Completion/lock stop or clear feedback; reduced motion is
+supported. No change to matching, eligibility or deletion authorization.

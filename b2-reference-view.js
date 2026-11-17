@@ -1,10 +1,37 @@
 // Session-only, read-only evidence; never sent as authorization to delete.
 let b2Workbook=null,b2ReferenceScan=null,b2ReferenceBusy=false,b2ReferenceRun=0,b2Bucket='',b2ReferenceExpiry=null;
+let b2QuotaUntil=0,b2ScanPhase='';
+function b2RenderActivity(){
+ const scan=b2ReferenceScan,busy=b2Busy||b2ReferenceBusy;
+ const completed=(scan?.coverage||[]).filter(c=>c.status==='complete').length;
+ const failed=(scan?.coverage||[]).filter(c=>c.status==='failed').length;
+ const total=b2Workbook?.sheets.filter(s=>s.mode!=='excluded').length||0;
+ const current=(scan?.coverage||[]).find(c=>c.status==='scanning');
+ const waiting=b2ReferenceBusy&&b2QuotaUntil>Date.now();
+ const seconds=Math.max(0,Math.ceil((b2QuotaUntil-Date.now())/1000));
+ let title='Workbook references not scanned',detail='Open the file listing, then scan workbook references.';
+ if(b2Busy){title='Loading B2 files…';detail=b2Rows.length+' versions loaded. Workbook scanning follows the complete listing.';}
+ else if(b2ReferenceBusy){
+  title=waiting?'Google quota pause · retrying in '+seconds+'s':b2ScanPhase==='verify'?'Verifying workbook coverage…':current?'Scanning '+current.sheet+'…':'Discovering workbook sheets…';
+  detail=(total?completed+' / '+total+' sheets scanned'+(failed?' · '+failed+' failed':'')+' · ':'')+(scan?.references.length||0)+' reference matches found. '+(waiting?'Keep this tab open; retry is automatic.':'Scanning is read-only; no files are being deleted.');
+ }else if(scan?.finished_at){
+  const expired=Date.now()-Date.parse(scan.finished_at)>=600000;
+  title=expired?'Scan evidence expired':scan.complete?'Workbook scan finished':'Workbook scan incomplete';
+  detail=completed+' / '+total+' sheets scanned · '+scan.references.length+' reference matches · '+scan.issues.length+' unresolved issues. '+(expired?'Refresh the scan.':scan.complete?'Review the rows and their explanations below.':'Open the scan evidence below for failed reads.');
+ }
+ $('b2-activity').hidden=false;$('b2-activity').dataset.state=busy?'loading':scan?.complete?'complete':'idle';
+ $('b2-activity-spinner').hidden=!busy;$('b2-activity-title').textContent=title;$('b2-activity-detail').textContent=detail;
+ $('b2-manager').setAttribute('aria-busy',String(busy));
+ const progress=$('b2-scan-progress');progress.hidden=!b2ReferenceBusy||!total;progress.max=total||1;progress.value=completed+failed;
+ $('b2-scan-references').textContent=b2ReferenceBusy?(waiting?'Waiting for Google…':'Scanning workbook…'):'Scan workbook references';
+}
 function b2ResetReferences(){
+ b2QuotaUntil=0;b2ScanPhase='';
  b2ReferenceRun++;b2Workbook=null;b2ReferenceScan=null;b2ReferenceBusy=false;clearTimeout(b2ReferenceExpiry);b2ReferenceExpiry=null;
  b2Selection.clear();b2Plan=null;
  $('b2-workbook-report').textContent='Workbook not scanned. All files require manual review.';
  $('b2-scan-references').disabled=false;
+ $('b2-activity').hidden=true;$('b2-activity-title').textContent='';$('b2-activity-detail').textContent='';$('b2-activity-spinner').hidden=true;$('b2-scan-progress').hidden=true;
 }
 function b2ReferenceLocation(r){return r.sheet+', column: '+r.column+' ('+r.column_letter+'), row: '+r.row;}
 function b2Classify(row,scan){
@@ -18,7 +45,7 @@ function b2Classify(row,scan){
  }
  const relevantIssues=(scan?.issues||[]).filter(i=>i.scope!=='object_key'||i.object_name===row.name);
  const fresh=scan?.finished_at&&Date.now()-Date.parse(scan.finished_at)<600000;
- if(!scan?.complete||!fresh)reasons.push('Manual review required: workbook evidence is incomplete, unavailable or expired. Refresh the workbook scan.');
+ if(!scan?.complete||!fresh)reasons.push(b2ReferenceBusy?'Workbook scan is running. Eligibility is pending until coverage is complete.':'Manual review required: workbook evidence is incomplete, unavailable or expired. Refresh the workbook scan.');
  for(const issue of relevantIssues)reasons.push('Manual review required: '+(issue.sheet?b2ReferenceLocation(issue)+'. ':'')+issue.reason);
  if(row.action!=='upload')reasons.push('This row is a '+row.action+' marker, not a deletable uploaded file version.');
  const uncertain=!scan?.complete||!fresh||!!relevantIssues.length||refs.some(r=>r.uncertain);
@@ -36,12 +63,13 @@ function b2ReferenceLink(r){
 }
 function b2ReferenceCells(row){return '<td>'+esc(row.workbook_reference_status)+'</td><td>'+row.workbook_references.map(r=>b2ReferenceLink(r)+'<br><small>Status: '+esc(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'</small>').join('<br>')+'</td><td><strong>'+esc(row.deletion_eligibility)+'</strong>'+(row.manual_review?'<br><small>Manual review required</small>':'')+'</td><td class="b2-reference-reasons">'+esc(row.eligibility_explanation||row.deletion_ineligibility_reason||'N/A')+row.review_issues.map(i=>i.cell_url?'<br>'+b2ReferenceLink(i):'').join('')+'</td>';}
 function b2RenderWorkbook(){
+ b2RenderActivity();
  const scan=b2ReferenceScan,m=b2Workbook;
  $('b2-workbook-report').textContent=(m?m.sheets.map(s=>s.title+' [sheet ID '+s.id+'] — '+s.mode+'; '+s.reason+(s.designated?' Uploaded-only designation verified.':'')+' '+s.rows+' rows × '+s.columns+' columns.').join('\n'):'Workbook inventory unavailable.')+'\n\n'+(scan?'Scan: '+(scan.complete?'complete':'incomplete')+'; '+scan.references.length+' object/reference matches; '+scan.issues.length+' unresolved issues; '+(scan.warnings||[]).length+' informational warnings.\nStarted: '+scan.started_at+'\nFinished: '+(scan.finished_at||'scanning')+'\n'+scan.issues.map(i=>(i.sheet||'Workbook')+(i.column?' / '+i.column:'')+(i.row?' / row '+i.row:'')+': '+i.reason).join('\n'):'No scan evidence.')+'\n'+(scan?.warnings||[]).map(w=>b2ReferenceLocation(w)+': '+w.reason).join('\n')+'\n'+(scan?.coverage||[]).map(c=>c.sheet+': '+c.status+' · '+(c.rows_read||0)+' rows read').join('\n')+'\nEvidence expires after 10 minutes. Eligibility is not deletion authorization.';
 }
 // Retries are confined to read-only workbook endpoints. No mutation is retried.
 async function b2ReferencePause(ms,current){
- for(let remaining=ms;remaining>0;remaining-=1000){if(!current())throw new DOMException('Scan cancelled','AbortError');await new Promise(resolve=>setTimeout(resolve,Math.min(1000,remaining)));}
+ for(let remaining=ms;remaining>0;remaining-=1000){if(!current())throw new DOMException('Scan cancelled','AbortError');if(b2ReferenceBusy)b2RenderActivity();await new Promise(resolve=>setTimeout(resolve,Math.min(1000,remaining))); }
  if(!current())throw new DOMException('Scan cancelled','AbortError');
 }
 async function b2ReferenceRead(current,path,payload){
@@ -51,7 +79,9 @@ async function b2ReferenceRead(current,path,payload){
   try{return await infraRequest('control',path,payload);}catch(e){
    if(!/^(b2_workbook_http_429|google_http_429)$/.test(e.message)||attempt===2)throw e;
    $('b2-workbook-report').textContent+='\nGoogle read quota reached. Pausing '+(65*(attempt+1))+' seconds before retrying this read.';
-   await b2ReferencePause(65000*(attempt+1),current);
+   b2QuotaUntil=Date.now()+65000*(attempt+1);
+   try{if(b2ReferenceBusy)b2RenderActivity();await b2ReferencePause(65000*(attempt+1),current);}
+   finally{if(current()){b2QuotaUntil=0;if(b2ReferenceBusy)b2RenderActivity();}}
   }
  }
 }
@@ -71,7 +101,7 @@ async function b2ScanWorkbook(){
   for(const sheet of [...meta.sheets].sort((a,b)=>Number(!!b.designated)-Number(!!a.designated)||a.id-b.id)){
    if(sheet.mode==='excluded'){scan.coverage.push({sheet:sheet.title,status:'excluded'});continue;}
    if(sheet.type!=='GRID'||!sheet.rows||!sheet.columns){scan.issues.push({sheet:sheet.title,reason:'Unsupported or unknown grid; manual review required.'});continue;}
-   let start=0;const coverage={sheet:sheet.title,status:'scanning',rows_read:0};scan.coverage.push(coverage);
+   let start=0;const coverage={sheet:sheet.title,status:'scanning',rows_read:0};scan.coverage.push(coverage);b2ScanPhase='sheets';b2RenderActivity();
    try{
    while(start!==null){
     if(++requests>100)throw Error('Scan request limit reached; not all workbook cells were inspected.');
@@ -86,6 +116,7 @@ async function b2ScanWorkbook(){
    coverage.status='complete';
    }catch(e){if(!current())return;coverage.status='failed';scan.issues.push({sheet:sheet.title,reason:e.message||'Sheet read failed'});b2RenderWorkbook();}
   }
+  b2ScanPhase='verify';b2RenderActivity();
   const after=await b2ReferenceRead(current,'/b2/workbook');if(!current())return;
   if(after.fingerprint!==meta.fingerprint)throw Error('Workbook tabs or policy changed during scanning. Restart the scan.');
   scan.complete=scan.coverage.every(s=>['complete','excluded'].includes(s.status));scan.finished_at=new Date().toISOString();

@@ -76,3 +76,15 @@ test('scan retains Streamables matches when a later sheet fails and marks eligib
  assert.match(h.get('b2-rows').innerHTML,/Referenced/);assert.match(h.get('b2-rows').innerHTML,/Unable to determine/);assert.match(h.get('b2-rows').innerHTML,/gid=2&amp;range=G2/);
  assert.equal(h.run('b2Selection.size'),0);
 });
+
+test('activity panel shows files, current sheet, quota countdown, completion and lock clearing',()=>{
+ const h=harness();h.run('b2Busy=true;renderB2()');assert.equal(h.get('b2-activity-spinner').hidden,false);assert.match(h.get('b2-activity-title').textContent,/Loading B2/);
+ h.run("b2Busy=false;b2ReferenceBusy=true;b2Workbook={sheets:[{mode:'included'},{mode:'included'}]};b2ReferenceScan={references:[],issues:[],coverage:[{sheet:'streamables',status:'complete'},{sheet:'streamables-yt',status:'scanning'}]};b2RenderActivity()");
+ assert.match(h.get('b2-activity-title').textContent,/Scanning streamables-yt/);assert.match(h.get('b2-activity-detail').textContent,/1 \/ 2 sheets/);assert.equal(h.get('b2-scan-progress').value,1);
+ h.run('b2QuotaUntil=Date.now()+65000;b2RenderActivity()');assert.match(h.get('b2-activity-title').textContent,/retrying in 65s/);assert.equal(h.get('b2-scan-references').textContent,'Waiting for Google…');
+ h.run('b2QuotaUntil=0;b2ReferenceBusy=false;b2ReferenceScan.complete=true;b2ReferenceScan.finished_at=new Date().toISOString();b2RenderActivity()');assert.equal(h.get('b2-activity-spinner').hidden,true);assert.match(h.get('b2-activity-title').textContent,/finished/);
+ h.run('lock()');assert.equal(h.get('b2-activity').hidden,true);assert.equal(h.get('b2-activity-title').textContent,'');
+});
+test('pending rows do not ask users to restart an active scan',()=>{
+ const h=harness();h.run("b2ReferenceBusy=true;b2ReferenceScan={complete:false,references:[],issues:[]};b2Rows=[{file_id:'a',name:'a',size:1,uploaded_at:0,action:'upload'}];renderB2()");assert.match(h.get('b2-rows').innerHTML,/scan is running/);assert.doesNotMatch(h.get('b2-rows').innerHTML,/Refresh the workbook scan/);
+});
