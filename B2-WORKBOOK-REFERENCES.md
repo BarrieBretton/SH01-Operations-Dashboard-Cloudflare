@@ -91,3 +91,36 @@ Validation uses fixtures including the audit failure patterns, exact statuses,
 all reference combinations, canonical cell links, padlock rules, retry behavior,
 partial-result retention, filters, authentication and blocked deletion requests.
 Live successful scan acceptance remains to be verified after deployment.
+
+## Completed-audit correction: field semantics and row explanations
+
+The completed operator audit reports all 28 included tabs scanned, 19 protected
+tabs excluded, 417 object versions, and 348 object/reference matches. It records
+the illustrated video at streamables-yt!G2 with exact status uploaded and a cell
+link. The other illustrated 1.05 GB video has no recorded match. These are scan
+observations, not a claim of present-day absence or permission to delete.
+
+Its 94 global flags comprise 36 Taskboard Priority formula errors, 42 provider
+column heuristics in tokens, 10 Telegram file-ID heuristics and 6 unresolved
+render_b2_file_name values. The revised scanner:
+- treats a provider name alone (BackBlaze B2) as a heading, not a file-ID schema;
+- recognizes the code-confirmed Telegram file_id/audio_file_id field semantics;
+- retains Taskboard Priority formula errors as informational warnings unless
+  their formula/link evidence explicitly contains a B2 reference;
+- still matches explicit B2 URLs or exact listed IDs/keys in EVERY column,
+  including the above fields; no entire sheet or column is skipped;
+- scopes an unresolved literal file-name/key to that exact key, without case or
+  substring matching, rather than blocking every unrelated filename;
+- continues to block globally for unknown B2 IDs, malformed B2 references,
+  unresolved file-reference formula errors, and incomplete scans.
+
+Do not infer that all opaque encodings/custom aliases are supported. Failed
+formula results cannot be reconstructed; the narrow Priority treatment assumes
+the task-attribute meaning of that field, while explicit B2 evidence overrides it.
+
+Each row now has an eligibility_explanation (including positive eligibility
+reasons) and review_issues with the actual blocking coordinates and cell links.
+Deletion Ineligibility Reason remains blank for eligible rows in the audit JSON;
+the table's combined explanation column displays the positive reason instead.
+Informational warnings and unresolved issues remain separately visible in the
+report. A fresh scan is required; the old audit is not retroactively relabeled.

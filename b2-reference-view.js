@@ -16,13 +16,14 @@ function b2Classify(row,scan){
   if(!r.designated)reasons.push(loc+'. Deletion prohibited because references from non-designated sheets are always protected, overriding any uploaded reference elsewhere.');
   else if(r.status_problem||r.status!=='uploaded')reasons.push(loc+'; status: '+(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'. Deletion prohibited because the exact status must be uploaded.'+(r.status_problem?' '+r.status_problem+'.':''));
  }
+ const relevantIssues=(scan?.issues||[]).filter(i=>i.scope!=='object_key'||i.object_name===row.name);
  const fresh=scan?.finished_at&&Date.now()-Date.parse(scan.finished_at)<600000;
  if(!scan?.complete||!fresh)reasons.push('Manual review required: workbook evidence is incomplete, unavailable or expired. Refresh the workbook scan.');
- if(scan?.issues?.length)reasons.push('Manual review required: '+scan.issues.length+' unresolved workbook issue(s). The Workbook discovery & scan evidence report identifies every affected sheet/cell and reason; unmatched objects cannot be declared safe.');
+ for(const issue of relevantIssues)reasons.push('Manual review required: '+(issue.sheet?b2ReferenceLocation(issue)+'. ':'')+issue.reason);
  if(row.action!=='upload')reasons.push('This row is a '+row.action+' marker, not a deletable uploaded file version.');
- const uncertain=!scan?.complete||!fresh||!!scan?.issues?.length||refs.some(r=>r.uncertain);
+ const uncertain=!scan?.complete||!fresh||!!relevantIssues.length||refs.some(r=>r.uncertain);
  return {workbook_reference_status:refs.length?'Referenced':uncertain?'Unknown — manual review':'Unreferenced',workbook_references:refs,
-  deletion_eligibility:row.action!=='upload'||refs.some(r=>!r.uncertain&&(!r.designated||r.status_problem||r.status!=='uploaded'))?'Ineligible':uncertain?'Unable to determine':'Eligible',deletion_ineligibility_reason:reasons.join('\n'),manual_review:uncertain};
+  deletion_eligibility:row.action!=='upload'||refs.some(r=>!r.uncertain&&(!r.designated||r.status_problem||r.status!=='uploaded'))?'Ineligible':uncertain?'Unable to determine':'Eligible',deletion_ineligibility_reason:reasons.join('\n'),eligibility_explanation:reasons.length?reasons.join('\n'):refs.length?'Eligible: all '+refs.length+' matching reference(s) are in streamables / streamables-yt with exact status uploaded; no other qualifying references were found.':'Eligible: complete fresh scan found no references in any qualifying sheet.',review_issues:relevantIssues,manual_review:uncertain};
 }
 function b2ReferenceFilter(row){
  const reference=$('b2-reference-filter').value,eligibility=$('b2-eligibility-filter').value;
@@ -33,10 +34,10 @@ function b2ReferenceLink(r){
  const safe=typeof r.cell_url==='string'&&/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+\/edit#gid=\d+&range=[A-Z]+[1-9]\d*$/.test(r.cell_url);
  return safe?'<a href="'+esc(r.cell_url)+'" target="_blank" rel="noopener noreferrer">'+esc(label)+' ↗</a>':esc(label);
 }
-function b2ReferenceCells(row){return '<td>'+esc(row.workbook_reference_status)+'</td><td>'+row.workbook_references.map(r=>b2ReferenceLink(r)+'<br><small>Status: '+esc(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'</small>').join('<br>')+'</td><td><strong>'+esc(row.deletion_eligibility)+'</strong>'+(row.manual_review?'<br><small>Manual review required</small>':'')+'</td><td class="b2-reference-reasons">'+esc(row.deletion_ineligibility_reason||'N/A')+'</td>';}
+function b2ReferenceCells(row){return '<td>'+esc(row.workbook_reference_status)+'</td><td>'+row.workbook_references.map(r=>b2ReferenceLink(r)+'<br><small>Status: '+esc(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'</small>').join('<br>')+'</td><td><strong>'+esc(row.deletion_eligibility)+'</strong>'+(row.manual_review?'<br><small>Manual review required</small>':'')+'</td><td class="b2-reference-reasons">'+esc(row.eligibility_explanation||row.deletion_ineligibility_reason||'N/A')+row.review_issues.map(i=>i.cell_url?'<br>'+b2ReferenceLink(i):'').join('')+'</td>';}
 function b2RenderWorkbook(){
  const scan=b2ReferenceScan,m=b2Workbook;
- $('b2-workbook-report').textContent=(m?m.sheets.map(s=>s.title+' [sheet ID '+s.id+'] — '+s.mode+'; '+s.reason+(s.designated?' Uploaded-only designation verified.':'')+' '+s.rows+' rows × '+s.columns+' columns.').join('\n'):'Workbook inventory unavailable.')+'\n\n'+(scan?'Scan: '+(scan.complete?'complete':'incomplete')+'; '+scan.references.length+' object/reference matches; '+scan.issues.length+' unresolved issues.\nStarted: '+scan.started_at+'\nFinished: '+(scan.finished_at||'scanning')+'\n'+scan.issues.map(i=>(i.sheet||'Workbook')+(i.column?' / '+i.column:'')+(i.row?' / row '+i.row:'')+': '+i.reason).join('\n'):'No scan evidence.')+'\n'+(scan?.coverage||[]).map(c=>c.sheet+': '+c.status+' · '+(c.rows_read||0)+' rows read').join('\n')+'\nEvidence expires after 10 minutes. Eligibility is not deletion authorization.';
+ $('b2-workbook-report').textContent=(m?m.sheets.map(s=>s.title+' [sheet ID '+s.id+'] — '+s.mode+'; '+s.reason+(s.designated?' Uploaded-only designation verified.':'')+' '+s.rows+' rows × '+s.columns+' columns.').join('\n'):'Workbook inventory unavailable.')+'\n\n'+(scan?'Scan: '+(scan.complete?'complete':'incomplete')+'; '+scan.references.length+' object/reference matches; '+scan.issues.length+' unresolved issues; '+(scan.warnings||[]).length+' informational warnings.\nStarted: '+scan.started_at+'\nFinished: '+(scan.finished_at||'scanning')+'\n'+scan.issues.map(i=>(i.sheet||'Workbook')+(i.column?' / '+i.column:'')+(i.row?' / row '+i.row:'')+': '+i.reason).join('\n'):'No scan evidence.')+'\n'+(scan?.warnings||[]).map(w=>b2ReferenceLocation(w)+': '+w.reason).join('\n')+'\n'+(scan?.coverage||[]).map(c=>c.sheet+': '+c.status+' · '+(c.rows_read||0)+' rows read').join('\n')+'\nEvidence expires after 10 minutes. Eligibility is not deletion authorization.';
 }
 // Retries are confined to read-only workbook endpoints. No mutation is retried.
 async function b2ReferencePause(ms,current){
@@ -59,7 +60,7 @@ async function b2ScanWorkbook(){
  b2ResetReferences();const run=++b2ReferenceRun,generation=b2Generation,epoch=authEpoch;
  const current=()=>run===b2ReferenceRun&&generation===b2Generation&&epoch===authEpoch;
  b2ReferenceBusy=true;$('b2-scan-references').disabled=true;
- const scan={complete:false,references:[],issues:[],started_at:new Date().toISOString(),finished_at:null};b2ReferenceScan=scan;
+ const scan={complete:false,references:[],issues:[],warnings:[],started_at:new Date().toISOString(),finished_at:null};b2ReferenceScan=scan;
  renderB2();
  try{
   const meta=await b2ReferenceRead(current,'/b2/workbook');if(!current())return;b2Workbook=meta;
@@ -78,7 +79,7 @@ async function b2ScanWorkbook(){
     const d=await b2ReferenceRead(current,'/b2/reference-scan',{bucket:b2Bucket,objects,fingerprint:meta.fingerprint,sheet_id:sheet.id,start_row:start});
     if(!current())return;
     if(d.fingerprint!==meta.fingerprint||d.sheet_id!==sheet.id||d.start_row!==start||!Number.isInteger(d.end_row)||d.end_row<=start||d.end_row>sheet.rows||d.next_row!==(d.end_row<sheet.rows?d.end_row:null)||!Array.isArray(d.references)||!Array.isArray(d.issues))throw Error('Incomplete workbook scan response; restart required.');
-    scan.references.push(...d.references);scan.issues.push(...d.issues);start=d.next_row;coverage.rows_read=d.end_row;scan.last_read_at=d.observed_at;
+    scan.references.push(...d.references);scan.issues.push(...d.issues);scan.warnings.push(...(d.warnings||[]));start=d.next_row;coverage.rows_read=d.end_row;scan.last_read_at=d.observed_at;
     if(scan.references.length+scan.issues.length>50000)throw Error('Reference report size limit reached; all files remain protected.');
     b2RenderWorkbook();renderB2();
    }

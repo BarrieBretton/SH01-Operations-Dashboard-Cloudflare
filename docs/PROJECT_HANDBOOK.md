@@ -868,3 +868,14 @@ retains successful matches across sheet failures and distinguishes Unable to
 determine from Ineligible. Evidence lasts ten minutes and remains read-only.
 See B2-WORKBOOK-REFERENCES.md. No new configuration is required for URL matching.
 Production scan success and eventual classifications remain unverified here.
+
+### Completed workbook audit: matching diagnostics
+
+Operator audit observed complete coverage (28 included / 19 excluded), 348
+object/reference matches and 94 global heuristic flags. Matching already found
+streamables-yt!G2. Corrections distinguish provider headings and code-confirmed
+Telegram IDs from B2 object fields, retain task Priority errors as warnings,
+and scope unresolved literal keys to their exact key. Explicit B2 matches still
+apply in every column; uncertain B2 IDs and file formula errors stay blocking.
+Row evidence now includes positive/negative eligibility explanations and links
+to specific blocking cells. Validation is mocked; live post-fix scan pending.

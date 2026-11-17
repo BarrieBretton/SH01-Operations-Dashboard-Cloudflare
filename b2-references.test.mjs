@@ -117,3 +117,33 @@ test('read-only retry waits on 429 and preserves the same chunk; non-quota failu
 test('reference header labels are not unresolved file values',()=>{
  const c=ctx();const d=c.b2MatchCells(sheet,head,[{values:head}],0,'bucket',objects);assert.equal(d.issues.length,0);
 });
+
+test('provider credential heading does not turn arbitrary strings into B2 file references',()=>{
+ const c=ctx(),s={...sheet,title:'tokens',designated:false};
+ const d=match(c,[['not-a-file-secret-fixture',''],['https://console.example.test/account','']],s,['BackBlaze B2','other'].map(cell));
+ assert.equal(d.issues.length,0);assert.equal(d.references.length,0);
+ const real=match(c,[['https://f005.backblazeb2.com/file/bucket/folder/a%20b.mp4','']],s,['BackBlaze B2','other'].map(cell));
+ assert.equal(real.references.length,2);assert.equal(c.b2Classify(obj,scan(real.references)).deletion_eligibility,'Ineligible');
+});
+test('known Telegram IDs are not B2 IDs; explicit B2 references in those fields still protect',()=>{
+ const c=ctx();for(const [title,column] of [['telegram-storage','file_id'],['telegram_audio_social_queue','audio_file_id']]){
+ const d=match(c,[['telegram-fixture-id','']],{...sheet,title,designated:false},[column,'status'].map(cell));assert.equal(d.issues.length,0);
+ const actual=match(c,[['id-1','']],{...sheet,title,designated:false},[column,'status'].map(cell));assert.equal(actual.references.length,2);
+ }
+});
+test('Priority formula errors are informational but file/status errors and explicit B2 formula evidence remain blocking',()=>{
+ const c=ctx(),err={effectiveValue:{errorValue:{type:'REF'}}},s={...sheet,title:'[Taskboard]',designated:false};
+ const d=match(c,[[err,'']],s,['Priority','status'].map(cell));assert.equal(d.issues.length,0);assert.equal(d.warnings.length,1);
+ const e=match(c,[[err,'']],s,['file_url','status'].map(cell));assert.equal(e.issues.length,1);
+ const b=match(c,[[{...err,userEnteredValue:{formulaValue:'=HYPERLINK("https://f005.backblazeb2.com/file/bucket/a")'}},'']],s,['Priority','status'].map(cell));assert.equal(b.issues.length,1);
+});
+test('unresolved exact keys are scoped and do not block unrelated objects; true unknown identities still block globally',()=>{
+ const c=ctx(),d=match(c,[['renders/missing.mp4','']],{...sheet,title:'telegram_audio_social_queue',designated:false},['render_b2_file_name','status'].map(cell));
+ assert.equal(d.issues.length,1);assert.equal(d.issues[0].scope,'object_key');
+ assert.equal(c.b2Classify(obj,scan([],d.issues)).deletion_eligibility,'Eligible');
+ const same=c.b2Classify({...obj,name:'renders/missing.mp4'},scan([],d.issues));assert.equal(same.deletion_eligibility,'Unable to determine');assert.match(same.deletion_ineligibility_reason,/row: 2/);
+ const global={sheet:'Archive',column:'b2_file_id',column_letter:'C',row:7,reason:'Unknown B2 version ID'};
+ const blocked=c.b2Classify(obj,scan([],[global]));assert.equal(blocked.deletion_eligibility,'Unable to determine');assert.match(blocked.deletion_ineligibility_reason,/Archive, column: b2_file_id \(C\), row: 7/);
+ assert.match(c.b2Classify(obj,scan()).eligibility_explanation,/no references/);
+ const refs=match(c,[['id-1','uploaded']]).references;assert.match(c.b2Classify(obj,scan(refs)).eligibility_explanation,/all 1 matching reference/);
+});

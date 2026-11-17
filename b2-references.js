@@ -75,7 +75,7 @@ function b2CellTokens(cell){
  return [...tokens];
 }
 function b2MatchCells(sheet,header,cells,start,bucket,objects){
- const byId=new Map(),byName=new Map(),refs=[],issues=[],seen=new Set();
+ const byId=new Map(),byName=new Map(),refs=[],issues=[],warnings=[],seen=new Set();
  for(const o of objects){byId.set(o.file_id,o);if(!byName.has(o.name))byName.set(o.name,[]);byName.get(o.name).push(o);}
  const headers=header.map((c,n)=>{const v=String(b2Value(c));return v.length<=120&&!/[{}\[\]\r\n]/.test(v)?v:b2Column(n);}),statusColumns=headers.flatMap((h,i)=>h==='status'?[i]:[]);
  const bucketColumns=headers.flatMap((h,i)=>['bucket','bucket_name','b2_bucket','b2_bucket_name'].includes(h.toLowerCase().trim())?[i]:[]);
@@ -87,8 +87,16 @@ function b2MatchCells(sheet,header,cells,start,bucket,objects){
   const contextualBucket=bucketValues.length===1?bucketValues[0]:bucketValues.length?null:sheet.default_bucket;
   for(let j=0;j<row.length;j++){
    const cell=row[j],column=headers[j]||b2Column(j),location={sheet:sheet.title,sheet_id:sheet.id,column,column_letter:b2Column(j),row:rowNumber};
-   const typed=/b2|backblaze|file.?id|file.?path|file.?url|object.?key/i.test(column);
-   if(cell.effectiveValue?.errorValue){issues.push({...location,reason:'Cell formula error; a reference could not be resolved.'});continue;}
+   const foreignId=(sheet.title==='telegram-storage'&&column==='file_id')||(sheet.title==='telegram_audio_social_queue'&&column==='audio_file_id');
+   const typed=!foreignId&&/(?:^|[_ -])(?:file[_ -]?(?:id|path|url|name)|object[_ -]?(?:key|id|path)|b2[_ -](?:path|url|key|id|name))(?:$|[_ -])/i.test(column);
+   const pathColumn=/(?:^|[_ -])(?:file[_ -]?(?:name|path)|object[_ -]?(?:key|path)|b2[_ -](?:path|key|name))$/i.test(column);
+   // Priority is a task attribute, not an object-reference field. Keep its errors visible.
+   const scalarPriority=sheet.title==='[Taskboard]'&&column==='Priority';
+   if(cell.effectiveValue?.errorValue){
+    const explicitB2=b2CellTokens(cell).some(t=>!!b2Identity(t)&&!b2Identity(t).unknown_url);
+    if(scalarPriority&&!explicitB2){warnings.push({...location,reason:'Task priority formula error; not used as a B2 reference or upload status.'});continue;}
+    issues.push({...location,reason:'Cell formula error; a possible reference could not be resolved.'});continue;
+   }
    for(const token of b2CellTokens(cell)){
     let identity=b2Identity(token),matched=[],uncertain=false;
     if(identity?.file_id){if(byId.has(identity.file_id))matched=byName.get(byId.get(identity.file_id).name);else issues.push({...location,reason:'B2 file ID is absent from this complete inventory; its bucket/key is unresolved.'});}
@@ -100,7 +108,8 @@ function b2MatchCells(sheet,header,cells,start,bucket,objects){
     }else if(identity?.unknown_url&&typed){issues.push({...location,reason:'Custom/unknown URL in a file reference column; bucket/key cannot be verified.'});}
     else if(rowNumber>sheet.header_row&&!identity&&typed&&token&&!['status','bucket','bucket_name','b2_bucket','b2_bucket_name'].includes(column.toLowerCase())&&!/^(?:n\/a|null|none)$/i.test(token)){
      // A path in a verified bucket can refer to an object no longer present. An unknown ID cannot.
-     if(!contextualBucket||/id/i.test(column))issues.push({...location,reason:'Unresolved file reference; no canonical bucket/path or matching version ID.'});
+     if(pathColumn&&!/[\r\n\x00]/.test(token)&&!token.includes('://'))issues.push({...location,scope:'object_key',object_name:token,reason:'Exact object key is absent from this inventory. This unresolved reference applies only to this key; it is not evidence about other filenames.'});
+     else if(!contextualBucket||/id/i.test(column))issues.push({...location,reason:'Unresolved file reference; no canonical bucket/path or matching version ID.'});
     }
     for(const o of matched){
      const key=JSON.stringify([o.file_id,sheet.id,rowNumber,j]);if(seen.has(key))continue;seen.add(key);
@@ -111,7 +120,7 @@ function b2MatchCells(sheet,header,cells,start,bucket,objects){
   }
  }
  const unique=[...new Map(issues.map(x=>[JSON.stringify(x),x])).values()];
- return {references:refs,issues:unique};
+ return {references:refs,issues:unique,warnings};
 }
 function b2ReferenceCoordinates(reference,workbookId){
  const cell=reference.column_letter+reference.row;
@@ -144,6 +153,6 @@ async function b2ReferenceApi(req,env,path){
   if(!c)throw Error('b2_workbook_grid_invalid');
   const header=h?.rowData?.[sheet.header_row-1-(h.startRow||0)]?.values||[];
   const result=b2MatchCells(sheet,header,c.rowData||[],start,input.bucket,input.objects);
-  return json({...result,references:result.references.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
+  return json({...result,references:result.references.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),issues:result.issues.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),warnings:result.warnings.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
  }catch(e){return error(/^(b2_|missing_GOOGLE_|google_)[a-zA-Z0-9_]+$/.test(e?.message)?e.message:'b2_reference_scan_failed',503);}
 }
