@@ -833,3 +833,18 @@ budgets use OPS_INFRA_LIMITS_JSON; ImageKit usage can use OPS_IMAGEKIT_USAGE_KEY
 quotas, current traffic/standby mappings and production deletion outcomes. Offline
 tests do not establish these. Real browser rendering was unavailable in the test host.
 See [INFRA-DESK-SETUP.md](../INFRA-DESK-SETUP.md) for full configuration, coverage and acceptance.
+
+## B2 workbook reference review (2026-11-17)
+
+Code-confirmed: `b2-references.js` discovers all tabs through existing Google
+OAuth and returns bounded read-only evidence. `b2-reference-view.js` classifies
+B2 versions, retains all coordinates/statuses and exposes reference/eligibility
+filters. See [B2 workbook reference review](../B2-WORKBOOK-REFERENCES.md) for the
+ID/title-bound Log/lock policy. Unreviewed sheets, uncertain identities, partial
+scans, errors and expired evidence block eligibility. Desk B2 preview/delete
+routes are paused for this read-only release; FastAPI/n8n routes are unchanged.
+
+Unverified: live workbook inventory, Log-button states, exact second Streamables
+title, live credential scopes and production deployment. Historical workflow
+names are code evidence only. Tests do not establish live scan completeness.
+No B2 objects were deleted and no workbook data was changed during implementation.

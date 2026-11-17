@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import fs from 'node:fs';
-const source=fs.readFileSync(new URL('./infra-view.js',import.meta.url),'utf8');
+const source=fs.readFileSync(new URL('./infra-view.js',import.meta.url),'utf8')+'\n'+fs.readFileSync(new URL('./b2-reference-view.js',import.meta.url),'utf8');
 function harness(){
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',disabled:false,hidden:false,innerHTML:'',textContent:'',dataset:{},open:false,classList:{add(){},remove(){},toggle(){},contains(){return false}},setAttribute(){},addEventListener(){},replaceChildren(){this.textContent=this.innerHTML=''},scrollIntoView(){},showModal(){this.open=true},close(){this.open=false},focus(){}});return nodes.get(id)};
  const c={console,URLSearchParams,AbortController,DOMException,Date,Set,Map,setTimeout,clearTimeout,$:get,esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),authEpoch:0,token:'reader',checkIdleSession:()=>true,tab(){},lock(){c.authEpoch++;c.token=''},banner(){},cancelCleanupRetry(){},stopAutoPreviews(){},fetch:async()=>Response.json({})};
@@ -23,12 +23,10 @@ test('unknown limits do not render a fake capacity donut',()=>{
 test('cancel clears reviewed plan without a delete request',()=>{
  const h=harness();let calls=0;h.c.fetch=()=>{calls++;};h.run("b2Plan={plan:'signed'}");h.get('b2-cancel').onclick();assert.equal(h.run('b2Plan'),null);assert.equal(calls,0);
 });
-test('delete requires typed confirmation and clears plan and selection after one request',async()=>{
- const h=harness();let calls=0;h.c.fetch=async()=>{calls++;return Response.json({results:[{file_id:'a',name:'a',status:'deleted'}],instruction:'Refresh'})};
- h.run("b2Slot='slot';b2Rows=[{file_id:'a',name:'a',size:10,uploaded_at:0,action:'upload',ticket:'t'}];b2Selection.add('a');b2Plan={plan:'signed',confirmation:'DELETE 1'};b2CanDelete=true");
- h.get('b2-confirm-input').value='wrong';await h.get('b2-delete').onclick();assert.equal(calls,0);
- h.get('b2-confirm-input').value='DELETE 1';await h.get('b2-delete').onclick();await h.get('b2-delete').onclick();
- assert.equal(calls,1);assert.equal(h.run('b2Plan'),null);assert.equal(h.run('b2Selection.size'),0);assert.equal(h.get('b2-review').disabled,true);assert.match(h.get('b2-results').textContent,/DELETED/);
+test('review-only UI never submits a deletion even with a legacy confirmed plan',async()=>{
+ const h=harness();let calls=0;h.c.fetch=async()=>{calls++;throw Error('must not call')};
+ h.run("b2Plan={plan:'signed',confirmation:'DELETE 1'};b2CanDelete=true");h.get('b2-confirm-input').value='DELETE 1';
+ await h.get('b2-delete').onclick();assert.equal(calls,0);assert.match(h.get('b2-error').textContent,/disabled/);
 });
 test('lock clears file data and confirmation and rejects delayed reads',async()=>{
  const h=harness();let resolve;h.c.fetch=()=>new Promise(r=>{resolve=r});const promise=h.run("infraRequest('control','/inventory')");
@@ -48,7 +46,7 @@ test('storage grouping, filter and bucket identity govern management actions',()
  h.get('infra-filter').value='attention';h.run('renderInfra()');assert.match(h.get('infra-cards').innerHTML,/Bot/);assert.doesNotMatch(h.get('infra-cards').innerHTML,/data-b2-open/);
 });
 test('folder browsing filters loaded rows without clearing other selected files',()=>{
- const h=harness();h.run("b2Rows=[{file_id:'a',name:'one/a.mp4',size:20,uploaded_at:0,action:'upload',ticket:'a'},{file_id:'b',name:'two/b.mp4',size:40,uploaded_at:0,action:'upload',ticket:'b'}];b2Selection.add('b');b2CanDelete=true");
+ const h=harness();h.run("b2Rows=[{file_id:'a',name:'one/a.mp4',size:20,uploaded_at:0,action:'upload',ticket:'a'},{file_id:'b',name:'two/b.mp4',size:40,uploaded_at:0,action:'upload',ticket:'b'}];b2ReferenceScan={complete:true,finished_at:new Date().toISOString(),references:[],issues:[]};b2Selection.add('b');b2CanDelete=true");
  h.get('b2-folder').value='one/';h.run('renderB2()');assert.match(h.get('b2-rows').innerHTML,/one\/a.mp4/);assert.doesNotMatch(h.get('b2-rows').innerHTML,/two\/b.mp4/);assert.equal(h.run("b2Selection.has('b')"),true);assert.match(h.get('b2-selected').textContent,/1 \/ 10/);
 });
 test('B2 shows decimal and binary units with exact bytes and scoped cap comparison',()=>{

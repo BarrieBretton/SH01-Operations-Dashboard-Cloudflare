@@ -167,6 +167,8 @@ button.is-loading::before{margin-right:8px}button.is-loading{cursor:progress}
 @media(max-width:700px){#infra-view{padding:16px}.infra-hero{align-items:flex-start;flex-direction:column}#infra-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.infra-stat{padding:16px}.infra-stat strong{font-size:27px}.infra-grid{grid-template-columns:1fr}#b2-manager{padding:16px}.infra-toolbar span{line-height:1.6}.infra-card{padding:16px}}
 .infra-service-icon{width:44px;height:44px;border:1px solid currentColor;border-radius:13px;display:grid;place-items:center;color:var(--service-color);background:#ffffff08;flex-shrink:0}.infra-service-icon svg{width:26px;height:26px}.infra-cap-note{padding:12px;border-left:3px solid #eac17d;background:#eac17d0b;color:#dfd2b9!important;font-size:11px!important;line-height:1.7}.infra-metric{flex-wrap:wrap}.infra-metric>div:last-child{min-width:0;flex:1}.infra-metric small{overflow-wrap:anywhere}
 
+.b2-reference-reasons{white-space:pre-wrap;overflow-wrap:anywhere;min-width:22rem;max-width:45rem} #b2-rows td{vertical-align:top} #b2-workbook-report{max-height:26rem;overflow:auto}
+
 /* END INFRA STYLES */
 </style></head><body><main class="shell"><header class="top"><div><div class="eyebrow">SH01 / system observability</div><h1 class="title">Operations desk<span style="color:#81d5b7">.</span></h1><p>Failures, source inventory and published content in one workspace.</p><div class="meta">Historical records begin when a source is connected. Stock reflects the latest sheet sync.</div></div><div class="top-tools"><span class="meta" id="session-age" title="Resets when you interact with this tab. Background refreshes do not reset it."></span><button class="btn" id="theme">Light mode</button><div class="meta" id="freshness">No data loaded</div></div></header><section id="login" class="card secret-panel"><div class="eyebrow">Private access</div><h2>Unlock dashboard</h2><p>Enter the dashboard token set in this Worker's secrets. The dashboard locks after 30 minutes without activity in this tab. Using it resets the timer; reloads preserve the remaining time.</p><input id="token" class="secret" type="password" autocomplete="off" aria-label="Dashboard token"><p><button class="btn" id="unlock">Open dashboard</button></p><p id="login-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="notice" role="alert"></div></section><section id="app" class="hidden"><div id="global-notice" role="status" aria-live="polite" class="hidden"></div><div class="nav" role="tablist"><button id="tab-failures" role="tab" aria-selected="true">Failures</button><button id="tab-producers" role="tab" aria-selected="false">Producers</button><button id="tab-meta" role="tab" aria-selected="false">Content &amp; analytics</button><button id="tab-infra" role="tab" aria-selected="false">Infrastructure</button><button class="btn" id="lock" style="margin-left:auto">Lock</button></div><div id="failure-view" class="card"><div class="eyebrow">Event timeline</div><h2>Failures</h2><p class="legend">Dates are UTC. No matching records does not prove the source is healthy. Coverage starts when each source is connected; messages are sanitized summaries.</p><div class="control"><label>Search<input id="failure-search" class="search" placeholder="Workflow, error text, service…"></label><label>Source<select id="failure-source"><option value="">All sources</option><option value="n8n">n8n</option><option value="sh01">SH01 Python</option></select></label><button class="btn" id="refresh-failures" aria-describedby="failure-error failure-status">Refresh failures</button></div><details class="desk-tools"><summary>Date filters (UTC)</summary><div class="control"><label>From<input type="date" id="from" aria-describedby="failure-error"></label><label>To<input type="date" id="to" aria-describedby="failure-error"></label></div></details><p id="failure-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="failure-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><p id="failure-status" class="sub" role="status"></p><div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Source</th><th>Workflow / service</th><th>Error</th><th>Open</th></tr></thead><tbody id="failures"></tbody></table></div><div id="failure-empty" class="empty hidden">No matching failures have been ingested.</div><p id="failure-more-loading" class="loading-indicator hidden" role="status" aria-live="polite" aria-atomic="true"></p><div id="failure-more-error" class="action-feedback hidden" role="status" aria-live="polite" tabindex="-1"></div><button id="more" class="btn hidden" style="margin-top:16px">Load more</button></div><!-- BEGIN PRODUCER VIEW -->
 <div id="producer-view" class="card hidden">
@@ -288,12 +290,13 @@ button.is-loading::before{margin-right:8px}button.is-loading{cursor:progress}
  <details class="infra-evidence"><summary>Inventory sources &amp; coverage</summary><p id="infra-coverage" class="sub"></p></details>
  <div id="infra-cards"></div>
  <section id="b2-manager" class="action-panel hidden" aria-labelledby="b2-heading">
-  <div class="eyebrow">Storage workspace</div><h3 id="b2-heading">Browse &amp; manage B2 files</h3><p id="b2-scope"></p>
-  <p>Each row is one stored version. Deletion is permanent and may break published links or queued jobs. Deleting the current version can expose an older version. Hide markers and unfinished uploads are displayed but cannot be deleted here.</p>
+  <div class="eyebrow">Storage workspace</div><h3 id="b2-heading">B2 files &amp; workbook references</h3><p id="b2-scope"></p>
+  <p>This workspace currently supports reference review only. Deletion is disabled here. Each row is one stored version. Deletion is permanent and may break published links or queued jobs. Deleting the current version can expose an older version. Hide markers and unfinished uploads are displayed but cannot be deleted here.</p>
   <div class="control"><button class="btn" id="b2-reload">Refresh files</button><button class="btn" id="b2-more" disabled>Load next 500 versions</button><label>Find loaded files<input id="b2-search" type="search" placeholder="Filename contains…"></label><label>Sort loaded files<select id="b2-sort"><option value="size-desc">Size · largest first</option><option value="size-asc">Size · smallest first</option><option value="name">Filename · A–Z</option><option value="newest">Upload · newest first</option></select></label></div>
   <div class="infra-folderbar"><label>Folder in loaded inventory<select id="b2-folder"><option value="">All folders</option></select></label><span id="b2-folder-note">Folder choices expand as more versions load.</span></div><div id="b2-usage"></div><p id="b2-progress" role="status" aria-live="polite"></p><div id="b2-error" class="action-feedback" role="status"></div>
-  <div class="control"><button class="btn" id="b2-clear">Clear selection</button><button class="btn infra-primary" id="b2-review" disabled>Review deletion</button><span id="b2-selected"></span></div>
-  <div class="scroll"><table><thead><tr><th>Select</th><th>Filename / version ID</th><th>Size</th><th>Uploaded (UTC)</th><th>Type</th></tr></thead><tbody id="b2-rows"></tbody></table></div>
+  <div class="control"><button class="btn" id="b2-scan-references">Scan workbook references</button><button class="btn" id="b2-download-audit">Download evidence JSON</button><label>Workbook references<select id="b2-reference-filter"><option value="">All reference states</option><option>Referenced</option><option>Unreferenced</option><option>Unknown — manual review</option></select></label><label>Deletion classification<select id="b2-eligibility-filter"><option value="">All classifications</option><option value="Eligible">Eligible for Deletion</option><option value="Ineligible">Ineligible for Deletion</option></select></label></div><details><summary>Workbook discovery &amp; scan evidence</summary><pre id="b2-workbook-report" class="b2-reference-reasons">Not scanned. All files require manual review.</pre></details>
+  <div class="control"><button class="btn" id="b2-clear">Clear selection</button><button class="btn infra-primary" id="b2-review" disabled>Review selected evidence</button><span id="b2-selected"></span></div>
+  <div class="scroll"><table><thead><tr><th>Select</th><th>B2 File / Object · File Path / Identifier</th><th>Size</th><th>Uploaded (UTC)</th><th>Type</th><th>Workbook Reference Status</th><th>Workbook References</th><th>Deletion Eligibility</th><th>Deletion Ineligibility Reason</th></tr></thead><tbody id="b2-rows"></tbody></table></div>
   <button class="btn" id="b2-show-more" hidden>Show 100 more loaded rows</button>
   <pre id="b2-results" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
  </section>
@@ -1502,59 +1505,128 @@ async function loadInfra(){
 }
 function setB2Busy(busy){b2Busy=busy;for(const id of ['b2-reload','b2-more','b2-review','b2-clear'])$(id).disabled=busy;renderB2();}
 function renderB2(){
+ for(const row of b2Rows)Object.assign(row,b2Classify(row,b2ReferenceScan));
+ for(const id of b2Selection)if(!b2Rows.some(r=>r.file_id===id&&r.deletion_eligibility==='Eligible'))b2Selection.delete(id);
+ $('b2-scan-references').disabled=b2Busy||b2ReferenceBusy||!b2Complete;
  const q=$('b2-search').value.toLowerCase(),sort=$('b2-sort').value,folder=$('b2-folder').value||'';
  const folders=new Set();for(const row of b2Rows){const parts=row.name.split('/');parts.pop();let path='';for(const part of parts){path+=part+'/';folders.add(path);}}
  $('b2-folder').innerHTML='<option value="">All folders</option>'+Array.from(folders).sort().map(f=>'<option value="'+esc(f)+'" '+(f===folder?'selected':'')+'>'+esc(f)+'</option>').join('');
  $('b2-folder').value=folder;
- const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
- $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||!r.ticket||!b2CanDelete?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td></tr>').join('');
+ const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)&&b2ReferenceFilter(r)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
+ $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||b2ReferenceBusy||r.deletion_eligibility!=='Eligible'?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td>'+b2ReferenceCells(r)+'</tr>').join('');
  $('b2-show-more').hidden=rows.length<=b2Visible;
- $('b2-review').disabled=b2Busy||!b2CanDelete||!b2Selection.size;
+ $('b2-review').disabled=b2Busy||b2ReferenceBusy||!b2Selection.size;
  $('b2-more').disabled=b2Busy||!b2Cursor;
  const selected=b2Rows.filter(r=>b2Selection.has(r.file_id)),bytes=b2Rows.filter(r=>r.action==='upload').reduce((n,r)=>n+r.size,0);
  $('b2-usage').innerHTML=b2Budget&&b2Complete?'<div class="infra-summary">'+infraDonut(100*bytes/b2Budget,'Listed uploaded version bytes against operator storage budget')+'<span>Listed version storage / operator budget</span></div>':'';
  $('b2-selected').textContent=selected.length+' / 10 selected · '+infraBytes(selected.reduce((n,r)=>n+r.size,0));
- $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraDecimalBytes(bytes)+' ('+infraBytes(bytes)+')'+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · deletion unavailable (readFiles/deleteFiles capability required)':'');
+ $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraDecimalBytes(bytes)+' ('+infraBytes(bytes)+')'+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · reference review only; deletion disabled':'');
 }
 async function loadB2(reset=false){
- if(b2Busy||!b2Slot)return;const generation=b2Generation,epoch=authEpoch;
- if(reset){b2Rows=[];b2Selection.clear();b2Cursor=null;b2Complete=false;b2Plan=null;b2Visible=100;$('b2-results').textContent='';}
+ if(b2Busy||b2ReferenceBusy||!b2Slot)return;const generation=b2Generation,epoch=authEpoch;
+ if(reset){b2ResetReferences();b2Rows=[];b2Selection.clear();b2Cursor=null;b2Complete=false;b2Plan=null;b2Visible=100;$('b2-results').textContent='';}
  $('b2-error').textContent='';setB2Busy(true);
  try{const d=await infraRequest('control','/b2/files?'+new URLSearchParams({slot:b2Slot,...(b2Cursor?{cursor:b2Cursor}:{})}));if(epoch!==authEpoch||generation!==b2Generation)return;
-  const existing=new Map(b2Rows.map(r=>[r.file_id,r]));for(const r of d.rows)existing.set(r.file_id,r);b2Rows=[...existing.values()];b2Cursor=d.next_cursor;b2Complete=!d.next_cursor;b2CanDelete=d.can_delete;b2Budget=d.storage_budget;
+  const existing=new Map(b2Rows.map(r=>[r.file_id,r]));for(const r of d.rows)existing.set(r.file_id,r);b2Rows=[...existing.values()];b2Cursor=d.next_cursor;b2Complete=!d.next_cursor;b2CanDelete=false;b2Bucket=d.bucket;b2Budget=d.storage_budget;
   $('b2-scope').textContent='Slot '+b2Slot+' · bucket '+d.bucket+(d.prefix?' · restricted prefix '+d.prefix:'')+' · '+d.scope;
  }catch(e){if(epoch===authEpoch&&generation===b2Generation)infraError('b2-error',e);}
  finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
 }
-async function openB2(slot){if(b2Busy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-folder').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}}
+async function openB2(slot){if(b2Busy||b2ReferenceBusy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-folder').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}if(b2Complete)await b2ScanWorkbook();}
 $('infra-cards').addEventListener('click',e=>{const b=e.target.closest('[data-b2-open]');if(b)openB2(infraRows[Number(b.dataset.b2Open)].id.slice(3));});
-$('b2-rows').addEventListener('change',e=>{const id=e.target.dataset.b2Id;if(!id||b2Busy)return;if(e.target.checked){if(b2Selection.size>=10){e.target.checked=false;$('b2-error').textContent='Select at most 10 versions per confirmation.';return;}b2Selection.add(id);}else b2Selection.delete(id);b2Plan=null;renderB2();});
+$('b2-rows').addEventListener('change',e=>{const id=e.target.dataset.b2Id;if(!id||b2Busy||b2ReferenceBusy)return;if(!b2Rows.some(r=>r.file_id===id&&b2Classify(r,b2ReferenceScan).deletion_eligibility==='Eligible')){e.target.checked=false;return;}if(e.target.checked){if(b2Selection.size>=10){e.target.checked=false;$('b2-error').textContent='Select at most 10 versions per confirmation.';return;}b2Selection.add(id);}else b2Selection.delete(id);b2Plan=null;renderB2();});
 $('b2-folder').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-search').oninput=()=>{b2Visible=100;renderB2();};$('b2-sort').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-show-more').onclick=()=>{b2Visible+=100;renderB2();};$('b2-reload').onclick=()=>loadB2(true);$('b2-more').onclick=()=>loadB2(false);$('b2-clear').onclick=()=>{b2Selection.clear();b2Plan=null;renderB2();};
-$('b2-review').onclick=async()=>{
- if(b2Busy||!b2Selection.size)return;const epoch=authEpoch,generation=b2Generation;setB2Busy(true);$('b2-error').textContent='';
- try{const d=await infraRequest('control','/b2/preview',{slot:b2Slot,tickets:b2Rows.filter(r=>b2Selection.has(r.file_id)).map(r=>r.ticket)});if(epoch!==authEpoch||generation!==b2Generation)return;b2Plan=d;
-  $('b2-confirm-summary').textContent=d.rows.length+' versions · '+infraBytes(d.bytes)+' · bucket '+d.bucket+'. Type '+d.confirmation+' to confirm. Review expires in 10 minutes.';
-  $('b2-confirm-files').innerHTML=d.rows.map(r=>'<li>'+esc(r.name)+' · '+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'<br><small>'+esc(r.file_id)+'</small></li>').join('');$('b2-confirm-input').value='';$('b2-delete').disabled=true;$('b2-confirm').showModal();$('b2-confirm-input').focus();
- }catch(e){if(epoch===authEpoch)infraError('b2-error',e);}finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
+$('b2-review').onclick=()=>{
+ renderB2();const rows=b2Rows.filter(r=>b2Selection.has(r.file_id));
+ $('b2-results').textContent=rows.map(r=>r.name+' · '+r.file_id+'\n'+r.workbook_reference_status+' · '+r.deletion_eligibility+'\n'+r.workbook_references.map(b2ReferenceLocation).join('\n')).join('\n\n')+'\nRead-only evidence. No deletion request was sent.';
 };
-$('b2-confirm-input').oninput=()=>{$('b2-delete').disabled=!b2Plan||$('b2-confirm-input').value!==b2Plan.confirmation;};
-$('b2-cancel').onclick=()=>{b2Plan=null;$('b2-confirm').close?.();};$('b2-confirm').addEventListener('cancel',()=>{b2Plan=null;});
-$('b2-delete').onclick=async()=>{
- if(b2Busy||!b2Plan||$('b2-confirm-input').value!==b2Plan.confirmation)return;
- const epoch=authEpoch,generation=b2Generation,plan=b2Plan;b2Plan=null;$('b2-confirm').close?.();setB2Busy(true);$('b2-error').textContent='';
- try{const d=await infraRequest('control','/b2/delete',{slot:b2Slot,plan:plan.plan,confirmation:plan.confirmation});if(epoch!==authEpoch||generation!==b2Generation)return;
-  $('b2-results').textContent=d.results.map(r=>r.status.toUpperCase()+' · '+r.name+' · '+r.file_id).join('\n')+'\n'+d.instruction;
- }catch(e){if(epoch===authEpoch){$('b2-results').textContent='Deletion outcome may be unknown. Refresh files to reconcile; nothing is automatically retried.';infraError('b2-error',e);}}
- finally{if(epoch===authEpoch&&generation===b2Generation){b2Selection.clear();b2CanDelete=false;b2Cursor=null;b2Complete=false;setB2Busy(false);}}
-};
+$('b2-confirm-input').oninput=()=>{$('b2-delete').disabled=true;};
+$('b2-cancel').onclick=()=>{b2Plan=null;$('b2-confirm').close?.();};
+$('b2-delete').onclick=()=>{$('b2-error').textContent='Deletion is disabled: workbook reference review only.';};
 $('infra-refresh').onclick=loadInfra;
 const infraOldTab=tab;
 tab=function(which){$('infra-view').classList.toggle('hidden',which!=='infra');$('tab-infra').setAttribute('aria-selected',which==='infra');if(which==='infra'){banner();cancelCleanupRetry();stopAutoPreviews();for(const name of ['failures','producers','meta']){$('tab-'+name).setAttribute('aria-selected','false');$(name==='failures'?'failure-view':name==='producers'?'producer-view':'meta-view').classList.add('hidden');}if(!infraRows.length)loadInfra();}else infraOldTab(which);};
 $('tab-infra').onclick=()=>tab('infra');
 const infraOldLock=lock;
-lock=function(){infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';$('b2-folder').innerHTML='<option value="">All folders</option>';$('b2-folder').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};
+lock=function(){b2ResetReferences();b2Bucket='';infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';$('b2-folder').innerHTML='<option value="">All folders</option>';$('b2-folder').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};
+
+// Session-only, read-only evidence; never sent as authorization to delete.
+let b2Workbook=null,b2ReferenceScan=null,b2ReferenceBusy=false,b2ReferenceRun=0,b2Bucket='',b2ReferenceExpiry=null;
+function b2ResetReferences(){
+ b2ReferenceRun++;b2Workbook=null;b2ReferenceScan=null;b2ReferenceBusy=false;clearTimeout(b2ReferenceExpiry);b2ReferenceExpiry=null;
+ b2Selection.clear();b2Plan=null;
+ $('b2-workbook-report').textContent='Workbook not scanned. All files require manual review.';
+ $('b2-scan-references').disabled=false;
+}
+function b2ReferenceLocation(r){return r.sheet+', column: '+r.column+' ('+r.column_letter+'), row: '+r.row;}
+function b2Classify(row,scan){
+ if(scan&&scan._indexed_count!==scan.references.length){scan._index=new Map();for(const ref of scan.references){if(!scan._index.has(ref.file_id))scan._index.set(ref.file_id,[]);scan._index.get(ref.file_id).push(ref);}scan._indexed_count=scan.references.length;}
+ const refs=scan?scan._index.get(row.file_id)||[]:[],reasons=[];
+ for(const r of refs){
+  const loc='Referenced in '+b2ReferenceLocation(r);
+  if(r.uncertain)reasons.push(loc+'. Manual review required: '+r.resolution+'.');
+  if(!r.designated)reasons.push(loc+'. Deletion prohibited because references from non-designated sheets are always protected, overriding any uploaded reference elsewhere.');
+  else if(r.status_problem||r.status!=='uploaded')reasons.push(loc+'; status: '+(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'. Deletion prohibited because the exact status must be uploaded.'+(r.status_problem?' '+r.status_problem+'.':''));
+ }
+ const fresh=scan?.finished_at&&Date.now()-Date.parse(scan.finished_at)<60000;
+ if(!scan?.complete||!fresh)reasons.push('Manual review required: workbook evidence is incomplete, unavailable or expired. Refresh the workbook scan.');
+ if(scan?.issues?.length)reasons.push('Manual review required: '+scan.issues.length+' unresolved workbook issue(s). The Workbook discovery & scan evidence report identifies every affected sheet/cell and reason; unmatched objects cannot be declared safe.');
+ if(row.action!=='upload')reasons.push('This row is a '+row.action+' marker, not a deletable uploaded file version.');
+ const uncertain=!scan?.complete||!fresh||!!scan?.issues?.length||refs.some(r=>r.uncertain);
+ return {workbook_reference_status:refs.length?'Referenced':uncertain?'Unknown — manual review':'Unreferenced',workbook_references:refs,
+  deletion_eligibility:reasons.length?'Ineligible':'Eligible',deletion_ineligibility_reason:reasons.join('\n'),manual_review:uncertain};
+}
+function b2ReferenceFilter(row){
+ const reference=$('b2-reference-filter').value,eligibility=$('b2-eligibility-filter').value;
+ return (!reference||row.workbook_reference_status===reference)&&(!eligibility||row.deletion_eligibility===eligibility);
+}
+function b2ReferenceCells(row){return '<td>'+esc(row.workbook_reference_status)+'</td><td>'+row.workbook_references.map(r=>esc(b2ReferenceLocation(r))+'<br><small>Status: '+esc(r.status===null?'missing / ambiguous':JSON.stringify(r.status))+'</small>').join('<br>')+'</td><td><strong>'+esc(row.deletion_eligibility)+'</strong>'+(row.manual_review?'<br><small>Manual review required</small>':'')+'</td><td class="b2-reference-reasons">'+esc(row.deletion_ineligibility_reason||'N/A')+'</td>';}
+function b2RenderWorkbook(){
+ const scan=b2ReferenceScan,m=b2Workbook;
+ $('b2-workbook-report').textContent=(m?m.sheets.map(s=>s.title+' [sheet ID '+s.id+'] — '+s.mode+'; '+s.reason+(s.designated?' Uploaded-only designation verified.':'')+' '+s.rows+' rows × '+s.columns+' columns.').join('\n'):'Workbook inventory unavailable.')+'\n\n'+(scan?'Scan: '+(scan.complete?'complete':'incomplete')+'; '+scan.references.length+' object/reference matches; '+scan.issues.length+' unresolved issues.\nStarted: '+scan.started_at+'\nFinished: '+(scan.finished_at||'scanning')+'\n'+scan.issues.map(i=>(i.sheet||'Workbook')+(i.column?' / '+i.column:'')+(i.row?' / row '+i.row:'')+': '+i.reason).join('\n'):'No scan evidence.')+'\nEvidence expires after 60 seconds. Eligibility is not deletion authorization.';
+}
+async function b2ScanWorkbook(){
+ if(b2ReferenceBusy||b2Busy||!b2Complete||!b2Bucket)return;
+ b2ResetReferences();const run=++b2ReferenceRun,generation=b2Generation,epoch=authEpoch;
+ const current=()=>run===b2ReferenceRun&&generation===b2Generation&&epoch===authEpoch;
+ b2ReferenceBusy=true;$('b2-scan-references').disabled=true;
+ const scan={complete:false,references:[],issues:[],started_at:new Date().toISOString(),finished_at:null};b2ReferenceScan=scan;
+ renderB2();
+ try{
+  const meta=await infraRequest('control','/b2/workbook');if(!current())return;b2Workbook=meta;
+  scan.issues.push(...meta.issues);b2RenderWorkbook();
+  const objects=b2Rows.map(r=>({file_id:r.file_id,name:r.name}));
+  if(objects.length>10000||JSON.stringify(objects).length>800000)throw Error('Inventory exceeds the bounded scan size. All files remain protected; narrow the configured B2 prefix.');
+  let requests=0;
+  for(const sheet of meta.sheets){
+   if(sheet.mode==='excluded')continue;
+   if(sheet.type!=='GRID'||!sheet.rows||!sheet.columns){scan.issues.push({sheet:sheet.title,reason:'Unsupported or unknown grid; manual review required.'});continue;}
+   let start=0;
+   while(start!==null){
+    if(++requests>100)throw Error('Scan request limit reached; not all workbook cells were inspected.');
+    const d=await infraRequest('control','/b2/reference-scan',{bucket:b2Bucket,objects,fingerprint:meta.fingerprint,sheet_id:sheet.id,start_row:start});
+    if(!current())return;
+    if(d.fingerprint!==meta.fingerprint||d.sheet_id!==sheet.id||d.start_row!==start||!Number.isInteger(d.end_row)||d.end_row<=start||d.end_row>sheet.rows||d.next_row!==(d.end_row<sheet.rows?d.end_row:null)||!Array.isArray(d.references)||!Array.isArray(d.issues))throw Error('Incomplete workbook scan response; restart required.');
+    scan.references.push(...d.references);scan.issues.push(...d.issues);start=d.next_row;
+    if(scan.references.length+scan.issues.length>50000)throw Error('Reference report size limit reached; all files remain protected.');
+    b2RenderWorkbook();
+   }
+  }
+  const after=await infraRequest('control','/b2/workbook');if(!current())return;
+  if(after.fingerprint!==meta.fingerprint)throw Error('Workbook tabs or policy changed during scanning. Restart the scan.');
+  scan.complete=true;scan.finished_at=new Date().toISOString();
+  b2ReferenceExpiry=setTimeout(()=>{if(current()){b2Selection.clear();renderB2();$('b2-workbook-report').textContent+='\nEXPIRED — refresh workbook evidence.';}},60000);
+ }catch(e){if(!current())return;scan.issues.push({reason:e.message||'Workbook scan failed.'});scan.finished_at=new Date().toISOString();}
+ finally{if(current()){b2ReferenceBusy=false;$('b2-scan-references').disabled=false;b2RenderWorkbook();renderB2();}}
+}
+$('b2-scan-references').onclick=b2ScanWorkbook;
+$('b2-reference-filter').onchange=$('b2-eligibility-filter').onchange=()=>{b2Visible=100;renderB2();};
+$('b2-download-audit').onclick=()=>{
+ const report={version:'workbook-references-v1',bucket:b2Bucket,inventory_complete:b2Complete,workbook:b2Workbook,scan:b2ReferenceScan?{...b2ReferenceScan,_index:undefined,_indexed_count:undefined}:null,objects:b2Rows.map(r=>({file_id:r.file_id,name:r.name,...b2Classify(r,b2ReferenceScan)})),note:'Read-only evidence. Not deletion authorization.'};
+ const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));a.href=url;a.download='b2-workbook-reference-audit.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),0);
+};
 
 // END INFRA UI
 restoreIdleSession();})();

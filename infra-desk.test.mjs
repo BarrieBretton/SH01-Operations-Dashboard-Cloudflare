@@ -21,9 +21,9 @@ test('bridge uses distinct keys, fixed routes and suppresses redirects',async()=
 test('missing control key is explicit and does not fall back to media key',async()=>{
  assert.equal((await worker.fetch(req('/api/infra/control/inventory'),{...env,CONTROL_PLANE_API_KEY:''},{})).status,503);
 });
-test('destructive bridge forwards only reviewed payload and never retries',async()=>{
- const old=globalThis.fetch;let calls=0;globalThis.fetch=async(u,o)=>{calls++;assert.deepEqual(JSON.parse(o.body),{slot:'b2-a',plan:'signed',confirmation:'DELETE 1'});throw Error('SECRET');};
- try{const r=await worker.fetch(req('/api/infra/control/b2/delete','POST',{slot:'b2-a',plan:'signed',confirmation:'DELETE 1',url:'https://evil'}),env,{});assert.equal(r.status,502);assert.equal((await r.json()).error,'infra_delete_outcome_unknown_refresh_files');assert.equal(calls,1);}finally{globalThis.fetch=old;}
+test('reference review release blocks preview/delete with zero upstream calls',async()=>{
+ const old=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error('no deletion permitted')};
+ try{for(const path of ['preview','delete']){const r=await worker.fetch(req('/api/infra/control/b2/'+path,'POST',{slot:'b2-a',plan:'signed',confirmation:'DELETE 1'}),env,{});assert.equal(r.status,409);assert.equal((await r.json()).error,'b2_deletion_disabled_reference_review_only');}assert.equal(calls,0);}finally{globalThis.fetch=old;}
 });
 test('provider errors are sanitized and upstream credential errors do not lock dashboard session',async()=>{
  const old=globalThis.fetch;globalThis.fetch=async()=>Response.json({detail:'secret-bearing upstream error'},{status:401});
@@ -59,7 +59,7 @@ test('Cloudflare-compatible redirect mode works and never follows upstream redir
     calls++;assert.equal(o.redirect,'manual');
     return new Response('redirect body',{status,headers:{Location:'https://other.test/secret-target'}});
    };
-   for(const [path,method,payload] of [['/api/infra/control/inventory','GET',null],['/api/infra/control/b2/delete','POST',{slot:'b2-a',plan:'signed',confirmation:'DELETE 1'}]]){
+   for(const [path,method,payload] of [['/api/infra/control/inventory','GET',null]]){
     const before=calls;
     const r=await worker.fetch(req(path,method,payload),env,{});
     assert.equal(r.status,502);assert.deepEqual(await r.json(),{error:'infra_upstream_redirect_rejected'});

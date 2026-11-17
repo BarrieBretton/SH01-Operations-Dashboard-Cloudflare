@@ -115,56 +115,49 @@ async function loadInfra(){
 }
 function setB2Busy(busy){b2Busy=busy;for(const id of ['b2-reload','b2-more','b2-review','b2-clear'])$(id).disabled=busy;renderB2();}
 function renderB2(){
+ for(const row of b2Rows)Object.assign(row,b2Classify(row,b2ReferenceScan));
+ for(const id of b2Selection)if(!b2Rows.some(r=>r.file_id===id&&r.deletion_eligibility==='Eligible'))b2Selection.delete(id);
+ $('b2-scan-references').disabled=b2Busy||b2ReferenceBusy||!b2Complete;
  const q=$('b2-search').value.toLowerCase(),sort=$('b2-sort').value,folder=$('b2-folder').value||'';
  const folders=new Set();for(const row of b2Rows){const parts=row.name.split('/');parts.pop();let path='';for(const part of parts){path+=part+'/';folders.add(path);}}
  $('b2-folder').innerHTML='<option value="">All folders</option>'+Array.from(folders).sort().map(f=>'<option value="'+esc(f)+'" '+(f===folder?'selected':'')+'>'+esc(f)+'</option>').join('');
  $('b2-folder').value=folder;
- const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
- $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||!r.ticket||!b2CanDelete?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td></tr>').join('');
+ const rows=b2Rows.filter(r=>r.name.startsWith(folder)&&r.name.toLowerCase().includes(q)&&b2ReferenceFilter(r)).sort((a,b)=>sort==='size-asc'?a.size-b.size:sort==='name'?a.name.localeCompare(b.name):sort==='newest'?b.uploaded_at-a.uploaded_at:b.size-a.size);
+ $('b2-rows').innerHTML=rows.slice(0,b2Visible).map(r=>'<tr><td><input type="checkbox" data-b2-id="'+esc(r.file_id)+'" aria-label="Select '+esc(r.name)+' version '+esc(r.file_id)+'" '+(b2Selection.has(r.file_id)?'checked ':'')+(b2Busy||b2ReferenceBusy||r.deletion_eligibility!=='Eligible'?'disabled':'')+'></td><td>'+esc(r.name)+'<br><small>'+esc(r.file_id)+'</small></td><td>'+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'</td><td>'+esc(new Date(r.uploaded_at).toISOString())+'</td><td>'+esc(r.action)+'</td>'+b2ReferenceCells(r)+'</tr>').join('');
  $('b2-show-more').hidden=rows.length<=b2Visible;
- $('b2-review').disabled=b2Busy||!b2CanDelete||!b2Selection.size;
+ $('b2-review').disabled=b2Busy||b2ReferenceBusy||!b2Selection.size;
  $('b2-more').disabled=b2Busy||!b2Cursor;
  const selected=b2Rows.filter(r=>b2Selection.has(r.file_id)),bytes=b2Rows.filter(r=>r.action==='upload').reduce((n,r)=>n+r.size,0);
  $('b2-usage').innerHTML=b2Budget&&b2Complete?'<div class="infra-summary">'+infraDonut(100*bytes/b2Budget,'Listed uploaded version bytes against operator storage budget')+'<span>Listed version storage / operator budget</span></div>':'';
  $('b2-selected').textContent=selected.length+' / 10 selected · '+infraBytes(selected.reduce((n,r)=>n+r.size,0));
- $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraDecimalBytes(bytes)+' ('+infraBytes(bytes)+')'+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · deletion unavailable (readFiles/deleteFiles capability required)':'');
+ $('b2-progress').textContent=(b2Busy?'Working… · ':'')+b2Rows.length+' versions loaded · '+infraDecimalBytes(bytes)+' ('+infraBytes(bytes)+')'+' in uploaded versions · '+(b2Complete?'Listing complete at read time':'PARTIAL listing: load remaining pages for whole-bucket size ordering')+(b2Budget?' · operator storage budget '+infraBytes(b2Budget):' · storage budget unknown')+(!b2CanDelete?' · reference review only; deletion disabled':'');
 }
 async function loadB2(reset=false){
- if(b2Busy||!b2Slot)return;const generation=b2Generation,epoch=authEpoch;
- if(reset){b2Rows=[];b2Selection.clear();b2Cursor=null;b2Complete=false;b2Plan=null;b2Visible=100;$('b2-results').textContent='';}
+ if(b2Busy||b2ReferenceBusy||!b2Slot)return;const generation=b2Generation,epoch=authEpoch;
+ if(reset){b2ResetReferences();b2Rows=[];b2Selection.clear();b2Cursor=null;b2Complete=false;b2Plan=null;b2Visible=100;$('b2-results').textContent='';}
  $('b2-error').textContent='';setB2Busy(true);
  try{const d=await infraRequest('control','/b2/files?'+new URLSearchParams({slot:b2Slot,...(b2Cursor?{cursor:b2Cursor}:{})}));if(epoch!==authEpoch||generation!==b2Generation)return;
-  const existing=new Map(b2Rows.map(r=>[r.file_id,r]));for(const r of d.rows)existing.set(r.file_id,r);b2Rows=[...existing.values()];b2Cursor=d.next_cursor;b2Complete=!d.next_cursor;b2CanDelete=d.can_delete;b2Budget=d.storage_budget;
+  const existing=new Map(b2Rows.map(r=>[r.file_id,r]));for(const r of d.rows)existing.set(r.file_id,r);b2Rows=[...existing.values()];b2Cursor=d.next_cursor;b2Complete=!d.next_cursor;b2CanDelete=false;b2Bucket=d.bucket;b2Budget=d.storage_budget;
   $('b2-scope').textContent='Slot '+b2Slot+' · bucket '+d.bucket+(d.prefix?' · restricted prefix '+d.prefix:'')+' · '+d.scope;
  }catch(e){if(epoch===authEpoch&&generation===b2Generation)infraError('b2-error',e);}
  finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
 }
-async function openB2(slot){if(b2Busy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-folder').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}}
+async function openB2(slot){if(b2Busy||b2ReferenceBusy){$('b2-error').textContent='Wait for the current file operation to finish.';return;}b2Generation++;b2Slot=slot;$('b2-sort').value='size-desc';$('b2-search').value='';$('b2-folder').value='';$('b2-manager').classList.remove('hidden');$('b2-manager').scrollIntoView({behavior:'smooth'});await loadB2(true);const generation=b2Generation;for(let pages=1;pages<20&&b2Cursor&&generation===b2Generation&&!$('infra-view').classList.contains('hidden');pages++){const count=b2Rows.length;await loadB2(false);if(b2Rows.length===count)break;}if(b2Complete)await b2ScanWorkbook();}
 $('infra-cards').addEventListener('click',e=>{const b=e.target.closest('[data-b2-open]');if(b)openB2(infraRows[Number(b.dataset.b2Open)].id.slice(3));});
-$('b2-rows').addEventListener('change',e=>{const id=e.target.dataset.b2Id;if(!id||b2Busy)return;if(e.target.checked){if(b2Selection.size>=10){e.target.checked=false;$('b2-error').textContent='Select at most 10 versions per confirmation.';return;}b2Selection.add(id);}else b2Selection.delete(id);b2Plan=null;renderB2();});
+$('b2-rows').addEventListener('change',e=>{const id=e.target.dataset.b2Id;if(!id||b2Busy||b2ReferenceBusy)return;if(!b2Rows.some(r=>r.file_id===id&&b2Classify(r,b2ReferenceScan).deletion_eligibility==='Eligible')){e.target.checked=false;return;}if(e.target.checked){if(b2Selection.size>=10){e.target.checked=false;$('b2-error').textContent='Select at most 10 versions per confirmation.';return;}b2Selection.add(id);}else b2Selection.delete(id);b2Plan=null;renderB2();});
 $('b2-folder').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-search').oninput=()=>{b2Visible=100;renderB2();};$('b2-sort').onchange=()=>{b2Visible=100;renderB2();};
 $('b2-show-more').onclick=()=>{b2Visible+=100;renderB2();};$('b2-reload').onclick=()=>loadB2(true);$('b2-more').onclick=()=>loadB2(false);$('b2-clear').onclick=()=>{b2Selection.clear();b2Plan=null;renderB2();};
-$('b2-review').onclick=async()=>{
- if(b2Busy||!b2Selection.size)return;const epoch=authEpoch,generation=b2Generation;setB2Busy(true);$('b2-error').textContent='';
- try{const d=await infraRequest('control','/b2/preview',{slot:b2Slot,tickets:b2Rows.filter(r=>b2Selection.has(r.file_id)).map(r=>r.ticket)});if(epoch!==authEpoch||generation!==b2Generation)return;b2Plan=d;
-  $('b2-confirm-summary').textContent=d.rows.length+' versions · '+infraBytes(d.bytes)+' · bucket '+d.bucket+'. Type '+d.confirmation+' to confirm. Review expires in 10 minutes.';
-  $('b2-confirm-files').innerHTML=d.rows.map(r=>'<li>'+esc(r.name)+' · '+esc(infraDecimalBytes(r.size))+'<br><small>'+esc(infraBytes(r.size))+'</small>'+'<br><small>'+esc(r.file_id)+'</small></li>').join('');$('b2-confirm-input').value='';$('b2-delete').disabled=true;$('b2-confirm').showModal();$('b2-confirm-input').focus();
- }catch(e){if(epoch===authEpoch)infraError('b2-error',e);}finally{if(epoch===authEpoch&&generation===b2Generation)setB2Busy(false);}
+$('b2-review').onclick=()=>{
+ renderB2();const rows=b2Rows.filter(r=>b2Selection.has(r.file_id));
+ $('b2-results').textContent=rows.map(r=>r.name+' · '+r.file_id+'\n'+r.workbook_reference_status+' · '+r.deletion_eligibility+'\n'+r.workbook_references.map(b2ReferenceLocation).join('\n')).join('\n\n')+'\nRead-only evidence. No deletion request was sent.';
 };
-$('b2-confirm-input').oninput=()=>{$('b2-delete').disabled=!b2Plan||$('b2-confirm-input').value!==b2Plan.confirmation;};
-$('b2-cancel').onclick=()=>{b2Plan=null;$('b2-confirm').close?.();};$('b2-confirm').addEventListener('cancel',()=>{b2Plan=null;});
-$('b2-delete').onclick=async()=>{
- if(b2Busy||!b2Plan||$('b2-confirm-input').value!==b2Plan.confirmation)return;
- const epoch=authEpoch,generation=b2Generation,plan=b2Plan;b2Plan=null;$('b2-confirm').close?.();setB2Busy(true);$('b2-error').textContent='';
- try{const d=await infraRequest('control','/b2/delete',{slot:b2Slot,plan:plan.plan,confirmation:plan.confirmation});if(epoch!==authEpoch||generation!==b2Generation)return;
-  $('b2-results').textContent=d.results.map(r=>r.status.toUpperCase()+' · '+r.name+' · '+r.file_id).join('\n')+'\n'+d.instruction;
- }catch(e){if(epoch===authEpoch){$('b2-results').textContent='Deletion outcome may be unknown. Refresh files to reconcile; nothing is automatically retried.';infraError('b2-error',e);}}
- finally{if(epoch===authEpoch&&generation===b2Generation){b2Selection.clear();b2CanDelete=false;b2Cursor=null;b2Complete=false;setB2Busy(false);}}
-};
+$('b2-confirm-input').oninput=()=>{$('b2-delete').disabled=true;};
+$('b2-cancel').onclick=()=>{b2Plan=null;$('b2-confirm').close?.();};
+$('b2-delete').onclick=()=>{$('b2-error').textContent='Deletion is disabled: workbook reference review only.';};
 $('infra-refresh').onclick=loadInfra;
 const infraOldTab=tab;
 tab=function(which){$('infra-view').classList.toggle('hidden',which!=='infra');$('tab-infra').setAttribute('aria-selected',which==='infra');if(which==='infra'){banner();cancelCleanupRetry();stopAutoPreviews();for(const name of ['failures','producers','meta']){$('tab-'+name).setAttribute('aria-selected','false');$(name==='failures'?'failure-view':name==='producers'?'producer-view':'meta-view').classList.add('hidden');}if(!infraRows.length)loadInfra();}else infraOldTab(which);};
 $('tab-infra').onclick=()=>tab('infra');
 const infraOldLock=lock;
-lock=function(){infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';$('b2-folder').innerHTML='<option value="">All folders</option>';$('b2-folder').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};
+lock=function(){b2ResetReferences();b2Bucket='';infraRun++;b2Generation++;for(const c of infraControllers)c.abort();infraControllers.clear();infraRows=[];b2Rows=[];b2Selection.clear();b2Slot='';b2Cursor=null;b2Plan=null;b2Busy=false;b2CanDelete=false;$('b2-confirm').close?.();$('infra-view').classList.add('hidden');$('b2-manager').classList.add('hidden');$('infra-refresh').disabled=false;for(const id of ['infra-cards','infra-summary','infra-coverage','infra-progress','infra-error','b2-rows','b2-results','b2-error','b2-scope','b2-confirm-files','b2-confirm-summary','b2-progress','b2-selected','b2-usage'])$(id).replaceChildren();$('b2-confirm-input').value='';$('b2-folder').innerHTML='<option value="">All folders</option>';$('b2-folder').value='';infraOldLock();$('failure-view').classList.remove('hidden');$('tab-failures').setAttribute('aria-selected','true');$('tab-infra').setAttribute('aria-selected','false');};

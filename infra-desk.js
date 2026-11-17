@@ -4,6 +4,9 @@ async function infraDeskApi(req,env){
  const u=new URL(req.url),p=u.pathname;
  const runtime=p.startsWith('/api/infra/runtime/');
  const path=runtime?p.slice('/api/infra/runtime'.length):p.slice('/api/infra/control'.length);
+ // Classification is read-only. Do not forward deletion operations in this release.
+ if(!runtime&&['/b2/preview','/b2/delete'].includes(path))return error('b2_deletion_disabled_reference_review_only',409);
+ if(!runtime&&(path==='/b2/workbook'&&req.method==='GET'||path==='/b2/reference-scan'&&req.method==='POST'))return b2ReferenceApi(req,env,path);
  const reads=['/inventory','/check','/b2/files'],writes=['/b2/preview','/b2/delete'];
  if((runtime&&!['/inventory','/check'].includes(path))||!(req.method==='GET'&&reads.includes(path)||req.method==='POST'&&!runtime&&writes.includes(path)))return error('infra_route_not_allowed',404);
  const key=runtime?env.MEDIA_CLIP_API_KEY:env.CONTROL_PLANE_API_KEY;
