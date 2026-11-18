@@ -98,23 +98,34 @@ async function b2ScanWorkbook(){
   const objects=b2Rows.map(r=>({file_id:r.file_id,name:r.name}));
   if(objects.length>10000||JSON.stringify(objects).length>800000)throw Error('Inventory exceeds the bounded scan size. All files remain protected; narrow the configured B2 prefix.');
   let requests=0;scan.coverage=[];
-  for(const sheet of [...meta.sheets].sort((a,b)=>Number(!!b.designated)-Number(!!a.designated)||a.id-b.id)){
-   if(sheet.mode==='excluded'){scan.coverage.push({sheet:sheet.title,status:'excluded'});continue;}
-   if(sheet.type!=='GRID'||!sheet.rows||!sheet.columns){scan.issues.push({sheet:sheet.title,reason:'Unsupported or unknown grid; manual review required.'});continue;}
-   let start=0;const coverage={sheet:sheet.title,status:'scanning',rows_read:0};scan.coverage.push(coverage);b2ScanPhase='sheets';b2RenderActivity();
+  const batches=b2ScanBatches(meta.sheets);
+  for(const sheet of meta.sheets){
+   const valid=sheet.type==='GRID'&&sheet.rows>0&&sheet.columns>0&&sheet.columns<=20000;
+   scan.coverage.push({sheet:sheet.title,sheet_id:sheet.id,status:sheet.mode==='excluded'?'excluded':valid?'pending':'failed',rows_read:0});
+   if(sheet.mode!=='excluded'&&!valid)scan.issues.push({sheet:sheet.title,reason:'Unsupported or unknown grid; manual review required.'});
+  }
+  for(const batch of batches){
+   const cover=batch.map(c=>scan.coverage.find(v=>v.sheet_id===c.sheet_id));
+   for(const c of cover)if(c.status!=='failed')c.status='scanning';
+   b2ScanPhase='sheets';b2RenderActivity();
    try{
-   while(start!==null){
     if(++requests>100)throw Error('Scan request limit reached; not all workbook cells were inspected.');
     if(requests>1)await b2ReferencePause(4000,current);
-    const d=await b2ReferenceRead(current,'/b2/reference-scan',{bucket:b2Bucket,objects,fingerprint:meta.fingerprint,sheet_id:sheet.id,start_row:start});
+    const response=await b2ReferenceRead(current,'/b2/reference-scan',{bucket:b2Bucket,objects,fingerprint:meta.fingerprint,chunks:batch.map(({sheet_id,start_row})=>({sheet_id,start_row}))});
     if(!current())return;
-    if(d.fingerprint!==meta.fingerprint||d.sheet_id!==sheet.id||d.start_row!==start||!Number.isInteger(d.end_row)||d.end_row<=start||d.end_row>sheet.rows||d.next_row!==(d.end_row<sheet.rows?d.end_row:null)||!Array.isArray(d.references)||!Array.isArray(d.issues))throw Error('Incomplete workbook scan response; restart required.');
-    scan.references.push(...d.references);scan.issues.push(...d.issues);scan.warnings.push(...(d.warnings||[]));start=d.next_row;coverage.rows_read=d.end_row;scan.last_read_at=d.observed_at;
+    if(response.fingerprint!==meta.fingerprint||!Array.isArray(response.results)||response.results.length!==batch.length||new Set(response.results.map(d=>d.sheet_id)).size!==batch.length)throw Error('Incomplete workbook batch response; restart required.');
+    // Validate the WHOLE batch before accepting any of its evidence.
+    for(const chunk of batch){const d=response.results.find(r=>r.sheet_id===chunk.sheet_id);
+     if(!d||d.fingerprint!==meta.fingerprint||d.start_row!==chunk.start_row||d.end_row!==chunk.end_row||d.next_row!==(chunk.end_row<chunk.rows?chunk.end_row:null)||!Array.isArray(d.references)||!Array.isArray(d.issues))throw Error('Incomplete workbook scan response; restart required.');
+    }
+    for(const d of response.results){
+     const coverage=scan.coverage.find(c=>c.sheet_id===d.sheet_id);
+     scan.references.push(...d.references);scan.issues.push(...d.issues);scan.warnings.push(...(d.warnings||[]));coverage.rows_read=d.end_row;scan.last_read_at=d.observed_at;
+     if(coverage.status!=='failed')coverage.status=d.next_row===null?'complete':'pending';
+    }
     if(scan.references.length+scan.issues.length>50000)throw Error('Reference report size limit reached; all files remain protected.');
     b2RenderWorkbook();renderB2();
-   }
-   coverage.status='complete';
-   }catch(e){if(!current())return;coverage.status='failed';scan.issues.push({sheet:sheet.title,reason:e.message||'Sheet read failed'});b2RenderWorkbook();}
+   }catch(e){if(!current())return;for(const c of cover){c.status='failed';scan.issues.push({sheet:c.sheet,reason:e.message||'Batch read failed'});}b2RenderWorkbook();}
   }
   b2ScanPhase='verify';b2RenderActivity();
   const after=await b2ReferenceRead(current,'/b2/workbook');if(!current())return;
@@ -130,3 +141,17 @@ $('b2-download-audit').onclick=()=>{
  const report={version:'workbook-references-v1',bucket:b2Bucket,inventory_complete:b2Complete,workbook:b2Workbook,scan:b2ReferenceScan?{...b2ReferenceScan,_index:undefined,_indexed_count:undefined}:null,objects:b2Rows.map(r=>({file_id:r.file_id,name:r.name,...b2Classify(r,b2ReferenceScan)})),note:'Read-only evidence. Not deletion authorization.'};
  const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));a.href=url;a.download='b2-workbook-reference-audit.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),0);
 };
+
+function b2ScanBatches(sheets){
+ const batches=[];let batch=[],cells=0;
+ const flush=()=>{if(batch.length)batches.push(batch);batch=[];cells=0;};
+ for(const sheet of [...sheets].sort((a,b)=>Number(!!b.designated)-Number(!!a.designated)||a.id-b.id)){
+  if(sheet.mode==='excluded'||sheet.type!=='GRID'||!sheet.rows||!sheet.columns||sheet.columns>20000)continue;
+  for(let start=0;start<sheet.rows;){
+   const end=Math.min(sheet.rows,start+Math.max(1,Math.floor(50000/sheet.columns))),cost=(end-start)*sheet.columns+(sheet.header_row<start+1||sheet.header_row>end?sheet.columns:0);
+   if(batch.length>=4||cells+cost>160000||batch.some(c=>c.sheet_id===sheet.id))flush();
+   batch.push({sheet_id:sheet.id,start_row:start,end_row:end,rows:sheet.rows});cells+=cost;start=end;
+  }
+ }
+ flush();return batches;
+}

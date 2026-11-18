@@ -133,3 +133,11 @@ scanning, final verification and quota waits have distinct labels. Quota pauses
 show an automatic-retry countdown. Completion stops the spinner; lock clears the
 panel. Reduced motion is supported. Pending rows explain that scanning is in
 progress rather than asking users to refresh. Eligibility rules are unchanged.
+
+## Batched reads (November 18)
+
+Workbook scans group up to four distinct sheets into one multi-range grid read, bounded at 160,000 requested cells including separate headers. Larger sheets retain 50,000-cell chunks and are covered completely. Each batch reuses one fresh metadata/protection check. The final workbook fingerprint check remains mandatory. Missing, duplicated or inconsistent batch results prevent complete eligibility evidence.
+
+Browser pacing remains four seconds between requests, with the existing quota backoff. Automatic cleanup keeps its three-second pacing and fail-closed error behavior; it still rescans before subsequent deletions. No concurrent Sheets requests were added. No sheets or columns were excluded to improve speed.
+
+The saved 28-sheet audit produces seven batches: 16 Sheets reads including initial/final metadata, versus approximately 58 previously. Browser inter-request pauses total 24 seconds rather than 108. These are request-plan counts, not a measured live latency guarantee. Google quota is still shared with n8n and other callers using the same project/user.

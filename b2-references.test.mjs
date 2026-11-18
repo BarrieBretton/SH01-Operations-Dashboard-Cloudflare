@@ -147,3 +147,25 @@ test('unresolved exact keys are scoped and do not block unrelated objects; true 
  assert.match(c.b2Classify(obj,scan()).eligibility_explanation,/no references/);
  const refs=match(c,[['id-1','uploaded']]).references;assert.match(c.b2Classify(obj,scan(refs)).eligibility_explanation,/all 1 matching reference/);
 });
+
+test('batch planner covers every included row with bounded unique-sheet batches',()=>{
+ const c=ctx(),sheets=Array.from({length:28},(_,id)=>({id,title:'s'+id,mode:'included',type:'GRID',rows:id===0?10001:1000,columns:26,header_row:1}));
+ sheets.push({...sheets[1],id:99,mode:'excluded'});
+ const batches=c.b2ScanBatches(sheets);
+ assert.ok(batches.length<28);
+ for(const batch of batches){assert.ok(batch.length<=4);assert.equal(new Set(batch.map(c=>c.sheet_id)).size,batch.length);assert.ok(batch.reduce((n,c)=>n+(c.end_row-c.start_row)*26+(c.start_row?26:0),0)<=160000);}
+ for(const s of sheets.filter(s=>s.mode==='included')){const chunks=batches.flat().filter(c=>c.sheet_id===s.id);let start=0;for(const c of chunks){assert.equal(c.start_row,start);start=c.end_row;}assert.equal(start,s.rows);}
+ assert.ok(!batches.flat().some(c=>c.sheet_id===99));
+});
+test('multi-sheet batch retains all references and uses one metadata and one grid read',async()=>{
+ const c=ctx();let metadataReads=0,gridReads=0;
+ const sheets=[1,2].map(id=>({id,title:id===1?'streamables':'Archive',mode:'included',type:'GRID',columns:2,rows:2,header_row:1,designated:id===1}));
+ c.sheetToken=async()=>'';c.b2WorkbookMetadata=async()=>{metadataReads++;return {fingerprint:'f',sheets}};c.body=r=>r.json();c.json=d=>Response.json(d);c.error=(e,status)=>Response.json({error:e},{status});
+ c.b2SheetGet=async(e,t,q)=>{gridReads++;assert.equal(q.getAll('ranges').length,2);return {sheets:sheets.map(s=>({properties:{sheetId:s.id},data:[{rowData:[{values:['url','status'].map(cell)},{values:['https://f005.backblazeb2.com/file/bucket/folder/a%20b.mp4?Authorization=SECRET','uploaded'].map(cell)}]}]}))}};
+ const payload={bucket:'bucket',objects,fingerprint:'f',chunks:[{sheet_id:1,start_row:0},{sheet_id:2,start_row:0}]};
+ const req=()=>new Request('https://desk.test',{method:'POST',body:JSON.stringify(payload)});
+ const result=await (await c.b2ReferenceApi(req(),{GOOGLE_SHEETS_SPREADSHEET_ID:'book'},'/b2/reference-scan')).json();
+ assert.equal(result.results.length,2);assert.equal(result.results[0].references.length,2);assert.equal(result.results[1].references[0].designated,false);assert.equal(metadataReads,1);assert.equal(gridReads,1);
+ c.b2SheetGet=async()=>({sheets:[]});const failed=await c.b2ReferenceApi(req(),{GOOGLE_SHEETS_SPREADSHEET_ID:'book'},'/b2/reference-scan');assert.equal(failed.status,503);
+ payload.chunks.push({sheet_id:1,start_row:0});assert.equal((await c.b2ReferenceApi(req(),{},'/b2/reference-scan')).status,400);
+});

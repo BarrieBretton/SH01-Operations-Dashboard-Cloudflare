@@ -135,24 +135,35 @@ async function b2ReferenceApi(req,env,path){
   const input=await body(req);
   if(input.fingerprint!==meta.fingerprint)return error('b2_workbook_changed_restart_scan',409);
   if(typeof input.bucket!=='string'||!input.bucket||!Array.isArray(input.objects)||input.objects.length>10000||input.objects.some(o=>typeof o.file_id!=='string'||!o.file_id||typeof o.name!=='string'||!o.name)||new Set(input.objects.map(o=>o.file_id)).size!==input.objects.length)return error('b2_reference_inventory_invalid',400);
-  const sheet=meta.sheets.find(s=>s.id===input.sheet_id);
-  if(!sheet||sheet.mode==='excluded'||sheet.type!=='GRID'||!sheet.columns||sheet.columns>20000)return error('b2_sheet_not_scannable',409);
-  const start=input.start_row;if(!Number.isInteger(start)||start<0||start>=sheet.rows)return error('b2_sheet_range_invalid',400);
-  const end=Math.min(sheet.rows,start+Math.max(1,Math.floor(50000/sheet.columns)));
-  const title="'"+sheet.title.replaceAll("'","''")+"'!",last=b2Column(sheet.columns-1);
+  const chunks=Array.isArray(input.chunks)?input.chunks:[{sheet_id:input.sheet_id,start_row:input.start_row}];
+  if(!chunks.length||chunks.length>4||new Set(chunks.map(c=>c.sheet_id)).size!==chunks.length)return error('b2_scan_batch_invalid',400);
+  const ranges=[],plans=[];let cells=0;
+  for(const chunk of chunks){
+   const sheet=meta.sheets.find(s=>s.id===chunk.sheet_id);
+   if(!sheet||sheet.mode==='excluded'||sheet.type!=='GRID'||!sheet.columns||sheet.columns>20000)return error('b2_sheet_not_scannable',409);
+   const start=chunk.start_row;if(!Number.isInteger(start)||start<0||start>=sheet.rows)return error('b2_sheet_range_invalid',400);
+   const end=Math.min(sheet.rows,start+Math.max(1,Math.floor(50000/sheet.columns)));
+   cells+=(end-start)*sheet.columns+(sheet.header_row<start+1||sheet.header_row>end?sheet.columns:0);
+   if(cells>160000)return error('b2_scan_batch_too_large',400);
+   const title="'"+sheet.title.replaceAll("'","''")+"'!",last=b2Column(sheet.columns-1);
+   ranges.push(title+'A'+(start+1)+':'+last+end);
+   if(sheet.header_row<start+1||sheet.header_row>end)ranges.push(title+'A'+sheet.header_row+':'+last+sheet.header_row);
+   plans.push({sheet,start,end});
+  }
   const fields='sheets(properties(sheetId),data(startRow,rowData(values(effectiveValue,userEnteredValue,hyperlink,textFormatRuns(format(link)),userEnteredFormat(textFormat(link))))))';
-  // One grid request includes header and chunk. Do not fetch the header separately.
-  const ranges=[title+'A'+(start+1)+':'+last+end];
-  if(sheet.header_row<start+1||sheet.header_row>end)ranges.unshift(title+'A'+sheet.header_row+':'+last+sheet.header_row);
   const query=new URLSearchParams({fields});for(const range of ranges)query.append('ranges',range);
-  const data=await b2SheetGet(env,token,query);
-  const grids=data.sheets?.find(s=>s.properties?.sheetId===sheet.id)?.data;
-  if(!Array.isArray(grids))throw Error('b2_workbook_grid_invalid');
-  const c=grids.find(g=>(g.startRow||0)===start);
-  const h=grids.find(g=>sheet.header_row-1>=(g.startRow||0)&&sheet.header_row-1<(g.startRow||0)+(g.rowData?.length||0));
-  if(!c)throw Error('b2_workbook_grid_invalid');
-  const header=h?.rowData?.[sheet.header_row-1-(h.startRow||0)]?.values||[];
-  const result=b2MatchCells(sheet,header,c.rowData||[],start,input.bucket,input.objects);
-  return json({...result,references:result.references.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),issues:result.issues.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),warnings:result.warnings.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
+  // One metadata check and one multi-range read for the entire bounded batch.
+  const data=await b2SheetGet(env,token,query),results=[];
+  for(const {sheet,start,end} of plans){
+   const grids=data.sheets?.find(s=>s.properties?.sheetId===sheet.id)?.data;
+   if(!Array.isArray(grids))throw Error('b2_workbook_grid_invalid');
+   const c=grids.find(g=>(g.startRow||0)===start);
+   const h=grids.find(g=>sheet.header_row-1>=(g.startRow||0)&&sheet.header_row-1<(g.startRow||0)+(g.rowData?.length||0));
+   if(!c)throw Error('b2_workbook_grid_invalid');
+   const header=h?.rowData?.[sheet.header_row-1-(h.startRow||0)]?.values||[];
+   const result=b2MatchCells(sheet,header,c.rowData||[],start,input.bucket,input.objects);
+   results.push({...result,references:result.references.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),issues:result.issues.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),warnings:result.warnings.map(r=>b2ReferenceCoordinates(r,env.GOOGLE_SHEETS_SPREADSHEET_ID)),sheet_id:sheet.id,fingerprint:meta.fingerprint,start_row:start,end_row:end,next_row:end<sheet.rows?end:null,observed_at:new Date().toISOString()});
+  }
+  return json(Array.isArray(input.chunks)?{results,fingerprint:meta.fingerprint}:results[0]);
  }catch(e){return error(/^(b2_|missing_GOOGLE_|google_)[a-zA-Z0-9_]+$/.test(e?.message)?e.message:'b2_reference_scan_failed',503);}
 }
