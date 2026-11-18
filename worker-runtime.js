@@ -39,9 +39,13 @@ async function runStoredJobs(raw){
  }
 }
 export default {
- async scheduled(event,raw,ctx){ctx.waitUntil(runStoredJobs(raw).catch(()=>console.log('scheduled_storage_unavailable')));},
+ async scheduled(event,raw,ctx){ctx.waitUntil(cleanupScheduled(raw));ctx.waitUntil(runStoredJobs(raw).catch(()=>console.log('scheduled_storage_unavailable')));},
  async fetch(req,raw,ctx){const u=new URL(req.url),p=u.pathname;
  if(p==='/'&&req.method==='GET')return new Response(HTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' blob: data: https://*.cdninstagram.com https://*.fbcdn.net https://*.tumblr.com; media-src blob: https://*.cdninstagram.com https://*.fbcdn.net https://*.tumblr.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+ if(p==='/api/ingest/b2-cleanup/workbook'||p==='/api/ingest/b2-cleanup/scan'){
+ if(!await authorized(req.headers.get('X-INGEST-KEY'),raw.CONTROL_PLANE_API_KEY))return error('Unauthorized',401);
+ return b2ReferenceApi(req,raw,p.endsWith('/workbook')?'/b2/workbook':'/b2/reference-scan');
+ }
  if(!p.startsWith('/api/'))return error('Not found',404);const ingest=p.startsWith('/api/ingest/'),given=ingest?req.headers.get('X-INGEST-KEY'):(req.headers.get('Authorization')||'').replace(/^Bearer\s+/i,'');const scannerBridgeRoute=(req.method==='GET'&&['/api/ingest/scanner/health','/api/ingest/scanner/accounts','/api/ingest/scanner/posts','/api/ingest/scanner/media'].includes(p))||(req.method==='POST'&&p==='/api/ingest/scanner/fingerprints');const scannerRoute=scannerBridgeRoute||(req.method==='GET'&&p==='/api/ingest/fingerprints')||(req.method==='POST'&&['/api/ingest/posts','/api/ingest/duplicate-groups'].includes(p));if(!await authorized(given,ingest?raw.INGEST_TOKEN:raw.DASHBOARD_TOKEN)&&!(scannerRoute&&await authorized(given,raw.MEDIA_CLIP_API_KEY)))return error('Unauthorized',401);
  try{
   if(p.startsWith('/api/infra/'))return await infraDeskApi(req,raw);
@@ -56,6 +60,7 @@ export default {
   if(p==='/api/storage/status'&&req.method==='GET')return json({...await storeRPC(raw,{op:'health'}),cutover_ready:raw.SHEETS_STORAGE_READY==='1'});
   if(raw.SHEETS_STORAGE_READY!=='1')return json({error:'sheets_migration_not_verified',instruction:'Complete migration verification before setting SHEETS_STORAGE_READY=1.'},503);
   const env=storageEnv(raw);
+  if(p==='/api/content/queue/reconcile'&&req.method==='POST')return json(await cleanupReconcile(env));
   if(p.startsWith('/api/ingest/scanner/'))return await scannerBridgeApi(req,env);
   if(p==='/api/content'||p.startsWith('/api/content/')||['/api/ingest/posts','/api/ingest/duplicate-groups','/api/ingest/fingerprints','/api/ingest/resolve-post','/api/ingest/deletion-result'].includes(p))return await contentApi(req,env,ctx);
   if(p==='/api/sheets/status'&&req.method==='GET')return json(await sheetStatus(env));

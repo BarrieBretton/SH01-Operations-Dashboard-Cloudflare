@@ -35,7 +35,7 @@ async function b2WorkbookMetadata(env,token){
  if(d.spreadsheetId!==env.GOOGLE_SHEETS_SPREADSHEET_ID||!Array.isArray(d.sheets)||!d.sheets.length)throw Error('b2_workbook_metadata_invalid');
  const sheets=d.sheets.map(s=>b2SheetInfo(s,policy)).sort((a,b)=>a.id-b.id);
  const fingerprint=await producerHash(JSON.stringify([d.spreadsheetId,sheets.map(s=>s.mode==='excluded'?{id:s.id,title:s.title,mode:s.mode}:s)]));
- return {version:B2_REFERENCE_VERSION,fingerprint,sheets,observed_at:new Date().toISOString(),
+ return {version:B2_REFERENCE_VERSION,workbook_id:d.spreadsheetId,fingerprint,sheets,observed_at:new Date().toISOString(),
   issues:sheets.filter(s=>s.mode==='unreviewed').map(s=>({sheet:s.title,reason:s.reason})),
   note:'Read-only observations, not an atomic workbook snapshot or deletion authorization. Protected sheets are excluded automatically; partial cell-range protections do not exclude entire tabs.'};
 }

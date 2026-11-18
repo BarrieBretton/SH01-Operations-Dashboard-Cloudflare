@@ -4,6 +4,9 @@ async function infraDeskApi(req,env){
  const u=new URL(req.url),p=u.pathname;
  const runtime=p.startsWith('/api/infra/runtime/');
  const path=runtime?p.slice('/api/infra/runtime'.length):p.slice('/api/infra/control'.length);
+ if(!runtime&&path==='/b2/automation'&&['GET','POST'].includes(req.method)){
+  try{return json(await cleanupRemote(env,false,'/infra/desk/b2/automation'+(req.method==='GET'?'?slot='+encodeURIComponent(u.searchParams.get('slot')||''):''),req.method==='POST'?await body(req):undefined));}catch(e){return error(e.message,503);}
+ }
  // Classification is read-only. Do not forward deletion operations in this release.
  if(!runtime&&['/b2/preview','/b2/delete'].includes(path))return error('b2_deletion_disabled_reference_review_only',409);
  if(!runtime&&(path==='/b2/workbook'&&req.method==='GET'||path==='/b2/reference-scan'&&req.method==='POST'))return b2ReferenceApi(req,env,path);
