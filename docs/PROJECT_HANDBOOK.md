@@ -883,3 +883,20 @@ to specific blocking cells. Validation is mocked; live post-fix scan pending.
 B2 loading now displays an activity panel, spinner, current-sheet progress and
 quota-retry countdown. Completion/lock stop or clear feedback; reduced motion is
 supported. No change to matching, eligibility or deletion authorization.
+
+
+## Snapchat publishing workspace — 18 November 2026
+
+The Producers pane includes a Snapchat workspace compiled from snapchat-view.html
+and snapchat-view.js. snapchat-worker.js is a fixed-route authenticated bridge to
+the existing OPS_INFRA_MEDIA_URL / MEDIA_CLIP_API_KEY backend. Setup and publication
+are explicit actions; viewing the panel does not publish. There is no n8n dependency.
+The backend owns the IST Workflow-Schedule handlers and durable job state.
+Optional SNAPCHAT_TICK_ENABLED=1 enables a wake/check call from the existing Worker
+cron; this patch does not create a cron trigger. B2 cleanup remains unchanged.
+
+The panel distinguishes queued, accepted, provider-verified LIVE, and uncertain
+outcomes, exposes workbook cell links, and clears data/in-flight requests on lock.
+Revenue and monetization approval are unknown. Analytics refresh is cached.
+See backend docs/SNAPCHAT-SETUP.md for account approval and configuration prerequisites.
+No live Snapchat or production deployment was verified by the offline tests.

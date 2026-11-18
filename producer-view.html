@@ -5,6 +5,26 @@
 
  <p id="producer-job-loading" class="loading-indicator hidden" role="status" aria-live="polite"></p><div id="producer-stats" class="stats"></div><p id="producer-approval-summary" class="legend" role="status"></p>
  <details><summary>What these counts mean</summary><p class="legend">The stock table groups by workbook, tab and account, matching the account-level Streamables selector. Creator is item metadata. Low inventory means count &lt; minimum required. The default minimum is 3; the workflow's CFG override was redacted and is unverified. Awaiting approval includes staged rows with approved=no, blank, or another non-yes value. Conflicting statuses are excluded. These counts reflect the Sheet status; they do not verify B2 files. Zero eligible items is different from every item being consumed. Stale snapshots are never shown as currently healthy. Row-state totals for other queues are not eligible media counts.</p></details>
+ <!-- BEGIN SNAPCHAT VIEW -->
+<section id="snapchat-panel" class="snapchat-panel" aria-labelledby="snapchat-heading">
+ <style>
+ .snapchat-panel{margin:24px 0;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--field)}.snapchat-heading{display:flex;align-items:center;gap:14px}.snapchat-mark{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;background:#fffc00;color:#151515}.snapchat-mark svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.7}.snapchat-panel h3{margin:3px 0}.snapchat-panel .control{gap:10px;align-items:end}.snapchat-panel td{white-space:normal;overflow-wrap:anywhere}.snapchat-panel .snapchat-status{padding:12px;border-left:3px solid var(--accent);margin:14px 0}.snapchat-panel .snapchat-error{color:var(--warn);white-space:pre-wrap}.snapchat-panel .scroll{max-height:420px}.snapchat-panel a{overflow-wrap:anywhere}.snapchat-panel .snapchat-controls{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+ </style>
+ <div class="snapchat-heading"><span class="snapchat-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V8a5 5 0 0 1 10 0v2l3 2-3 2 2 4-3-1-2 3-2-2-2 2-2-3-3 1 2-4-3-2z"/></svg></span><div><div class="eyebrow">Server workflow · IST</div><h3 id="snapchat-heading">Snapchat publishing</h3></div></div>
+ <p class="legend">Prepared videos from Snapchat-Queue, scheduled by Workflow-Schedule. Public Profile API approval and account authorization are required. Publishing status does not establish monetization eligibility.</p>
+ <div class="snapchat-controls"><button id="snapchat-refresh" class="btn">Refresh status</button><button id="snapchat-preview" class="btn">Load content queue</button><button id="snapchat-metrics" class="btn">Refresh analytics</button></div>
+ <p id="snapchat-loading" class="loading-indicator hidden" role="status" aria-live="polite"></p>
+ <p id="snapchat-error" class="snapchat-error" role="alert"></p>
+ <div id="snapchat-status" class="snapchat-status" role="status">Connection and publishing status have not been checked.</div>
+ <div id="snapchat-schedules"></div><div id="snapchat-metric-values"></div>
+ <details><summary>Connect Snapchat / initialize queue</summary><p class="legend">Initialize creates the Snapchat-Queue tab and internal job storage if missing. Existing rows and schedules are preserved. Connect opens Snapchat authorization after your backend credentials are configured.</p><div class="snapchat-controls"><button id="snapchat-setup" class="btn">Initialize Snapchat queue</button><button id="snapchat-connect" class="btn">Connect Snapchat</button><button id="snapchat-check" class="btn">Check API connection</button></div><p id="snapchat-authorize"></p></details>
+ <h4>Ready content &amp; validation</h4><p id="snapchat-queue-note" class="legend">Load the content queue to inspect workbook references and readiness.</p>
+ <div class="scroll"><table><thead><tr><th>Item / source</th><th>Destination</th><th>Workbook cell</th><th>Readiness / reason</th><th>Action</th></tr></thead><tbody id="snapchat-queue"></tbody></table></div>
+ <h4>Publishing history</h4><p class="legend">Accepted means Snapchat acknowledged publication. Published means its API subsequently reported the Spotlight LIVE. Stories without post identifiers require verification in Snapchat. Uncertain outcomes are never automatically reposted.</p>
+ <div class="scroll"><table><thead><tr><th>Item</th><th>Destination</th><th>Status / progress</th><th>Workbook / post</th><th>Updated</th></tr></thead><tbody id="snapchat-jobs"></tbody></table></div>
+</section>
+
+<!-- END SNAPCHAT VIEW -->
  <h3>Measured Sheet stock</h3>
  <div class="control">
   <label>Search<input id="producer-search" class="search" placeholder="Account, tab, creator, workflow"></label>
