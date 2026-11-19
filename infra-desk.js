@@ -2,6 +2,7 @@
 function infraBase(value){const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||u.pathname!=='/')throw Error('infra_invalid_origin');return u.origin;}
 async function infraDeskApi(req,env){
  const u=new URL(req.url),p=u.pathname;
+ if(p.startsWith('/api/infra/control/config'))return cfgRoute(req,env,p.slice('/api/infra/control'.length));
  const runtime=p.startsWith('/api/infra/runtime/');
  const path=runtime?p.slice('/api/infra/runtime'.length):p.slice('/api/infra/control'.length);
  if(!runtime&&path==='/b2/automation'&&['GET','POST'].includes(req.method)){
