@@ -1,0 +1,130 @@
+{
+  "nodes": {
+    "render-a/sh01": {
+      "url": "https://sh01.onrender.com",
+      "id": "srv-d4iv0pm3jp1c73cadhb0",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_A_API_KEY",
+      "vars": {
+        "SH01_ROLE": "worker"
+      }
+    },
+    "render-a/n8n": {
+      "url": "https://n8n-hbek.onrender.com",
+      "id": "srv-d4ivdj7diees738dnhd0",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_A_API_KEY",
+      "vars": {
+        "DB_TYPE": "postgresdb"
+      }
+    },
+    "render-b/sh01": {
+      "url": "https://sh01-fastapi-server.onrender.com",
+      "id": "srv-d516shd6ubrc73dd93s0",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_B_API_KEY",
+      "vars": {
+        "SH01_ROLE": "worker"
+      }
+    },
+    "render-b/n8n": {
+      "url": "https://n8n-fbal.onrender.com",
+      "id": "srv-d518kah5pdvs73cjujog",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_B_API_KEY",
+      "vars": {
+        "DB_TYPE": "postgresdb"
+      }
+    },
+    "render-c/sh01": {
+      "url": "https://sh01-fastapi-server-3sfj.onrender.com",
+      "id": "srv-dbesmm29lscs7380lvng",
+      "workspace": "tea-dbescggae00c73dvembg",
+      "email": "",
+      "key": "RENDER_C_API_KEY",
+      "vars": {
+        "SH01_ROLE": "worker"
+      }
+    },
+    "render-c/n8n": {
+      "url": "https://sh01-lwv7.onrender.com",
+      "id": "srv-dbesol2vcj2c73e1vd8g",
+      "workspace": "tea-dbescggae00c73dvembg",
+      "email": "",
+      "key": "RENDER_C_API_KEY",
+      "vars": {
+        "DB_TYPE": "postgresdb"
+      }
+    },
+    "d0ya": {
+      "url": "https://sh01-fastapi-server-d0ya.onrender.com",
+      "id": "",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_D0YA_API_KEY",
+      "vars": {
+        "SH01_ROLE": "controller",
+        "INFRA_REGISTRY_JSON": "{\"render\":{\"render-a\":{\"api_key_env\":\"RENDER_A_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_A_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_A_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_A_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_A_SH01_BASE_URL\",\"health_path\":\"/\"}},\"render-b\":{\"api_key_env\":\"RENDER_B_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_B_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_B_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_B_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_B_SH01_BASE_URL\",\"health_path\":\"/\"}},\"render-c\":{\"api_key_env\":\"RENDER_C_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_C_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_C_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_C_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_C_SH01_BASE_URL\",\"health_path\":\"/\"}}},\"postgres\":{\"supabase-a\":{\"host_env\":\"SUPABASE_A_HOST\",\"port_env\":\"SUPABASE_A_PORT\",\"user_env\":\"SUPABASE_A_USER\",\"database_env\":\"SUPABASE_A_DB\",\"password_env\":\"SUPABASE_A_PASSWORD\",\"runtime_port\":6543},\"supabase-b\":{\"host_env\":\"SUPABASE_B_HOST\",\"port_env\":\"SUPABASE_B_PORT\",\"user_env\":\"SUPABASE_B_USER\",\"database_env\":\"SUPABASE_B_DB\",\"password_env\":\"SUPABASE_B_PASSWORD\",\"runtime_port\":6543}},\"b2\":{\"b2-a\":{\"key_id_env\":\"BACKBLAZE_KEY_ID\",\"application_key_env\":\"BACKBLAZE_APPLICATION_KEY\",\"bucket_name_env\":\"BACKBLAZE_BUCKET_NAME\"}}}",
+        "RENDER_C_SH01_SERVICE_ID": "srv-dbesmm29lscs7380lvng",
+        "RENDER_C_SH01_BASE_URL": "https://sh01-fastapi-server-3sfj.onrender.com",
+        "RENDER_C_N8N_SERVICE_ID": "srv-dbesol2vcj2c73e1vd8g",
+        "RENDER_C_N8N_BASE_URL": "https://sh01-lwv7.onrender.com"
+      },
+      "secrets": {
+        "RENDER_C_API_KEY": "RENDER_C_API_KEY"
+      }
+    },
+    "mtwu": {
+      "url": "https://sh01-fastapi-server-mtwu.onrender.com",
+      "id": "",
+      "workspace": "",
+      "email": "",
+      "key": "RENDER_MTWU_API_KEY",
+      "vars": {
+        "SH01_ROLE": "controller",
+        "INFRA_REGISTRY_JSON": "{\"render\":{\"render-a\":{\"api_key_env\":\"RENDER_A_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_A_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_A_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_A_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_A_SH01_BASE_URL\",\"health_path\":\"/\"}},\"render-b\":{\"api_key_env\":\"RENDER_B_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_B_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_B_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_B_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_B_SH01_BASE_URL\",\"health_path\":\"/\"}},\"render-c\":{\"api_key_env\":\"RENDER_C_API_KEY\",\"n8n\":{\"service_id_env\":\"RENDER_C_N8N_SERVICE_ID\",\"base_url_env\":\"RENDER_C_N8N_BASE_URL\",\"health_path\":\"/healthz/readiness\"},\"sh01\":{\"service_id_env\":\"RENDER_C_SH01_SERVICE_ID\",\"base_url_env\":\"RENDER_C_SH01_BASE_URL\",\"health_path\":\"/\"}}},\"postgres\":{\"supabase-a\":{\"host_env\":\"SUPABASE_A_HOST\",\"port_env\":\"SUPABASE_A_PORT\",\"user_env\":\"SUPABASE_A_USER\",\"database_env\":\"SUPABASE_A_DB\",\"password_env\":\"SUPABASE_A_PASSWORD\",\"runtime_port\":6543},\"supabase-b\":{\"host_env\":\"SUPABASE_B_HOST\",\"port_env\":\"SUPABASE_B_PORT\",\"user_env\":\"SUPABASE_B_USER\",\"database_env\":\"SUPABASE_B_DB\",\"password_env\":\"SUPABASE_B_PASSWORD\",\"runtime_port\":6543}},\"b2\":{\"b2-a\":{\"key_id_env\":\"BACKBLAZE_KEY_ID\",\"application_key_env\":\"BACKBLAZE_APPLICATION_KEY\",\"bucket_name_env\":\"BACKBLAZE_BUCKET_NAME\"}}}",
+        "RENDER_C_SH01_SERVICE_ID": "srv-dbesmm29lscs7380lvng",
+        "RENDER_C_SH01_BASE_URL": "https://sh01-fastapi-server-3sfj.onrender.com",
+        "RENDER_C_N8N_SERVICE_ID": "srv-dbesol2vcj2c73e1vd8g",
+        "RENDER_C_N8N_BASE_URL": "https://sh01-lwv7.onrender.com"
+      },
+      "secrets": {
+        "RENDER_C_API_KEY": "RENDER_C_API_KEY"
+      }
+    }
+  },
+  "workers": {
+    "sh01": {
+      "vars": {
+        "BACKENDS": "https://sh01-fastapi-server.onrender.com,https://sh01.onrender.com,https://sh01-fastapi-server-3sfj.onrender.com"
+      },
+      "source": "https://github.com/BarrieBretton/sh01-fastapi-server/blob/7765ee0e6acb7e665d7b63e50de5660dd89a80db/cloudflare/sh01-worker.js",
+      "email": ""
+    },
+    "n8n-prod-1": {
+      "vars": {
+        "BACKENDS": "https://n8n-fbal.onrender.com,https://n8n-hbek.onrender.com,https://sh01-lwv7.onrender.com"
+      },
+      "source": "https://github.com/BarrieBretton/sh01-fastapi-server/blob/7765ee0e6acb7e665d7b63e50de5660dd89a80db/cloudflare/n8n-prod-1-worker.js",
+      "email": ""
+    },
+    "infra-control": {
+      "vars": {
+        "BACKENDS": "https://sh01-fastapi-server-d0ya.onrender.com,https://sh01-fastapi-server-mtwu.onrender.com"
+      },
+      "source": "",
+      "email": ""
+    },
+    "infra-sla-watchdog": {
+      "vars": {
+        "CONTROL_PLANE_BASE_URL": "https://infra-control.vivojaymail.workers.dev"
+      },
+      "source": "https://github.com/BarrieBretton/sh01-fastapi-server/blob/7765ee0e6acb7e665d7b63e50de5660dd89a80db/cloudflare/infra-sla-watchdog-worker.js",
+      "email": ""
+    }
+  }
+}

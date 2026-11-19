@@ -1,0 +1,11 @@
+<details class="infra-evidence" id="cfg-panel"><summary>Live routing &amp; infrastructure configuration</summary>
+<style>#cfg-panel{padding:1rem;border:1px solid var(--line);border-radius:12px}#cfg-panel summary{cursor:pointer}#cfg-panel button,#cfg-panel label{margin:.5rem .5rem .5rem 0}#cfg-panel pre{white-space:pre-wrap;overflow-wrap:anywhere}#cfg-original{width:100%;box-sizing:border-box}</style>
+<button class="btn" id="cfg-load">Refresh routing and services</button><pre id="cfg-live" aria-live="polite"></pre>
+<label>Configuration target <select id="cfg-target"></select></label> <label>Setting <select id="cfg-key"></select></label>
+<pre id="cfg-value"></pre>
+<label>Configuration admin key <input id="cfg-admin" type="password" autocomplete="off"></label>
+<button class="btn" id="cfg-preview">Preview provider change</button> <button class="btn" id="cfg-apply" disabled>Apply reviewed setting</button>
+<p id="cfg-result" role="status"></p>
+<details><summary>Manual workbook export</summary><p>Paste the existing column below to preserve other rows and their order. Matching keys are replaced and missing managed keys are appended. Values stay in this tab.</p>
+<textarea id="cfg-original" rows="4" autocomplete="off" spellcheck="false" placeholder="Existing KEY=value rows"></textarea>
+<button class="btn" id="cfg-copy">Copy updated column for selected target</button></details></details>
