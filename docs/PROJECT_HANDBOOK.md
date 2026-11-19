@@ -1,5 +1,7 @@
 # Operations Dashboard project handbook
 
+[Producer, infrastructure and trends roadmap](PRODUCERS-AND-TRENDS-ROADMAP.md)
+
 **Current implementation baseline:** dashboard `d628a76` plus this reviewed change; companion server based on `daa29fa`. Deployment is a separate evidence item. Read [implementation and acceptance](IMPLEMENTATION-ACCEPTANCE.md) before operating or continuing development.
 
 ## Architecture
