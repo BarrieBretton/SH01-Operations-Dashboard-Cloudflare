@@ -1,7 +1,7 @@
 // Only fixed Snapchat backend routes are exposed; provider credentials stay server-side.
 async function snapchatRemote(raw,path,method='GET',payload){
  if(!raw.MEDIA_CLIP_API_KEY)throw Error('snapchat_media_key_not_configured');
- const base=infraBase(raw.OPS_INFRA_MEDIA_URL||'https://sh01.onrender.com');
+ const base=infraBase(raw.OPS_INFRA_MEDIA_URL||'https://sh01.vivojaymail.workers.dev');
  const c=new AbortController(),timer=setTimeout(()=>c.abort(),25000);
  try{
   const r=await fetch(base+'/snapchat'+path,{method,headers:{'X-API-KEY':raw.MEDIA_CLIP_API_KEY,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:JSON.stringify(payload||{})}:{}),redirect:'manual',signal:c.signal});

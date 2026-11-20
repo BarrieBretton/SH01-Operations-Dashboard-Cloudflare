@@ -23,9 +23,36 @@ function renderSnapchatMetrics(metrics){
  const v=metrics.values||{},num=n=>typeof n==='number'?n.toLocaleString(undefined,{maximumFractionDigits:1}):'Unknown';
  $('snapchat-metric-values').innerHTML='<div class="stats">'+[['Followers',v.SUBSCRIBERS],['Spotlight views',v.SPOTLIGHT_VIEWS],['Story views',v.STORY_VIEWS],['Spotlight watch hours',v.SPOTLIGHT_VIEW_TIME_MILLIS===undefined?undefined:v.SPOTLIGHT_VIEW_TIME_MILLIS/3600000],['Story watch hours',v.STORY_VIEW_TIME_MILLIS===undefined?undefined:v.STORY_VIEW_TIME_MILLIS/3600000]].map(([n,x])=>'<span>'+esc(n)+'<strong>'+esc(num(x))+'</strong></span>').join('')+'</div><p class="legend">'+esc(metrics.period_note||'')+' Collected '+esc(new Date(metrics.checked_at*1000).toISOString())+'. Revenue and monetization approval are not available from this report.</p>';
 }
+function renderSnapchatStatus(d){
+ const guidance={
+  check_workbook_access:'Check access to the Google workbook and its Snapchat job storage, then refresh status.',
+  initialize_workbook:'Choose Initialize Snapchat queue to finish setting up workbook storage.',
+  configure_snapchat:'Finish Snapchat configuration on the SH01 media backend, then refresh status.',
+  check_encryption_key:'Check that the backend uses the original Snapchat token encryption key.',
+  connect_snapchat:'Once Snap has approved your app for the Public Profile API, choose Connect Snapchat and authorize your profile.',
+  reconnect_snapchat:'Choose Connect Snapchat to authorize the configured app and profile again.',
+  check_profile_access:'Choose Check API connection to verify that the app can read your Public Profile.',
+  review_queue:'Choose Load content queue to review the next prepared video and its workbook row.'
+ };
+ const heading=[d.enabled?'Publishing enabled':'Publishing paused',d.connection?.display_name].filter(Boolean).join(' · ');
+ const details=[];
+ if(d.missing_configuration?.length)details.push('Missing settings · '+d.missing_configuration.join(', '));
+ if(d.configuration_error)details.push('Configuration error · '+d.configuration_error);
+ if(d.state_error)details.push('Workbook error · '+d.state_error);
+ if(d.authorization_error)details.push('Credential error · '+d.authorization_error);
+ if(d.schedule_error)details.push('Schedule error · '+d.schedule_error);
+ const hint=Object.hasOwn(guidance,d.next_step)?guidance[d.next_step]:[d.authorization,d.api_access].filter(Boolean).join(' · ');
+ $('snapchat-status').innerHTML='<strong>'+esc(heading)+'</strong>'+
+  (hint?'<div>'+esc(hint)+'</div>':'')+details.map(line=>'<div class="sub">'+esc(line)+'</div>').join('');
+ if(['initialize_workbook','connect_snapchat','reconnect_snapchat','check_profile_access'].includes(d.next_step)){
+  $('snapchat-connection-settings').open=true;
+ }
+}
 async function snapchatLoad(){
- const d=await snapchatRequest('/health');snapchatHealth=d;snapchatJobs=d.jobs||[];
- $('snapchat-status').textContent=(d.enabled?'Publishing enabled':'Publishing paused')+' · '+d.authorization+' · '+d.api_access+(d.connection?.display_name?' · '+d.connection.display_name:'')+(d.missing_configuration?.length?' · Configure: '+d.missing_configuration.join(', '):'')+(d.state_error?' · '+d.state_error:'')+(d.schedule_error?' · '+d.schedule_error:'');
+ const d=await snapchatRequest('/health');
+ if(typeof d?.enabled!=='boolean')throw Error('Snapchat returned an incomplete status report. Refresh status to check again.');
+ snapchatHealth=d;snapchatJobs=d.jobs||[];
+ renderSnapchatStatus(d);
  $('snapchat-schedules').innerHTML=(d.schedules||[]).map(s=>'<p><strong>'+esc(s.workflow)+'</strong> · '+esc(s.error||(!s.times?.length?'No scheduled times':'Next: '+s.next_at))+' · IST</p>').join('');
  renderSnapchatJobs();renderSnapchatQueue();renderSnapchatMetrics(d.metrics);
 }
