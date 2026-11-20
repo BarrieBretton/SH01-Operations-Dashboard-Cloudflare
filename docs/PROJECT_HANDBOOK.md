@@ -902,3 +902,9 @@ outcomes, exposes workbook cell links, and clears data/in-flight requests on loc
 Revenue and monetization approval are unknown. Analytics refresh is cached.
 See backend docs/SNAPCHAT-SETUP.md for account approval and configuration prerequisites.
 No live Snapchat or production deployment was verified by the offline tests.
+
+**20 November activation update.** Snapchat defaults to the stable SH01 router,
+`https://sh01.vivojaymail.workers.dev`, for desk actions and the opt-in tick.
+An explicit `OPS_INFRA_MEDIA_URL` still takes precedence. **Refresh status**
+shows the next setup action from the server, opens connection controls when
+needed and still accepts responses from the first pilot version.
